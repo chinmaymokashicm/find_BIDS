@@ -281,10 +281,42 @@ class Dataset(BaseModel):
         #             features_save_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
         
         
-    def export(self) -> dict:
+    def to_json(self) -> dict:
         if self.subjects is None:
             return {}
         export_path: Path = self.features_root / "dataset.json"
         with open(export_path, "w") as f:
             json.dump(self.model_dump(mode="json"), f, indent=4)
         return self.model_dump()
+    
+    def export_all_features_to_table(self) -> None:
+        """
+        Export all features for all series in the dataset to a single CSV file for easier analysis and visualization. The CSV file will have one row per series, with columns for subject_id, session_id, series_id, and all extracted features.
+        """
+        if self.subjects is None:
+            return
+        records: list[dict[str, Any]] = []
+        for subject in self.subjects:
+            for session in subject.sessions or []:
+                for series in session.series or []:
+                    features_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
+                    if not features_path.exists():
+                        if self.dtype == "DICOM":
+                            series_features = SeriesFeatures.from_dicom_series(series.path)
+                        elif self.dtype == "Nifti":
+                            series_features = SeriesFeatures.from_nifti_series(series.path)
+                        else:
+                            continue
+                    else:
+                        series_features = SeriesFeatures.from_json(features_path)
+                    record: dict = series_features.flatten()
+                    record = {
+                        "subject_id": subject.subject_id,
+                        "session_id": session.session_id,
+                        "series_id": series.series_id,
+                        **record
+                    }
+                    records.append(record)
+        df = pd.DataFrame(records)
+        table_save_path = self.features_root / "features.csv"
+        df.to_csv(table_save_path, index=False)

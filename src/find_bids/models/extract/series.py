@@ -34,6 +34,7 @@ import pydicom as dicom
 from rich.progress import track, Progress, TextColumn, BarColumn, TimeRemainingColumn
 import numpy as np
 from pydicom.multival import MultiValue
+from pydicom.valuerep import DSfloat
 
 CAMEL_TO_SNAKE_CASE_PATTERN: re.Pattern = re.compile(r'(?<!^)(?=[A-Z])')
 SNAKE_TO_CAMEL_CASE_PATTERN: re.Pattern = re.compile(r'(_)([a-z])')
@@ -346,6 +347,16 @@ class TemporalFeatures(BaseModel):
             num_timepoints=num_timepoints,
             temporal_variation=temporal_variation,
         )
+        
+    def flatten(self) -> dict[str, Optional[float]]:
+        return {
+            "repetition_time": self.repetition_time.value if self.repetition_time else None,
+            "echo_time": self.echo_time.value if self.echo_time else None,
+            "inversion_time": self.inversion_time.value if self.inversion_time else None,
+            "flip_angle": self.flip_angle.value if self.flip_angle else None,
+            "num_timepoints": self.num_timepoints,
+            "temporal_variation": self.temporal_variation.value if self.temporal_variation else None,
+        }
 
 class DiffusionFeatures(BaseModel):
     b_values: Optional[list[float]] = None  # unique shells
@@ -416,6 +427,15 @@ class DiffusionFeatures(BaseModel):
             num_diffusion_directions=len(gradients) if gradients else None,
             has_diffusion=has_diffusion,
         )
+        
+    def flatten(self) -> dict[str, list[float] | int | bool | None]:
+        return {
+            "b_values": self.b_values if self.b_values else None,
+            "num_b0": self.num_b0,
+            "num_diffusion_volumes": self.num_diffusion_volumes,
+            "num_diffusion_directions": self.num_diffusion_directions,
+            "has_diffusion": self.has_diffusion.value if self.has_diffusion else None,
+        }
 
 class PerfusionFeatures(BaseModel):
     perfusion_labeling_type: Optional[SeriesCategoricalFeature] = None
@@ -425,6 +445,16 @@ class PerfusionFeatures(BaseModel):
 
     num_timepoints: Optional[int] = None
     temporal_spacing: Optional[SeriesNumericFeature] = None
+
+    def flatten(self) -> dict[str, str | float | int | None]:
+        return {
+            "perfusion_labeling_type": self.perfusion_labeling_type.value if self.perfusion_labeling_type else None,
+            "bolus_arrival_time": self.bolus_arrival_time.value if self.bolus_arrival_time else None,
+            "contrast_agent": self.contrast_agent.value if self.contrast_agent else None,
+            "perfusion_series_type": self.perfusion_series_type.value if self.perfusion_series_type else None,
+            "num_timepoints": self.num_timepoints,
+            "temporal_spacing": self.temporal_spacing.value if self.temporal_spacing else None,
+        }
 
     def __str__(self) -> str:
         return format_section(
@@ -539,6 +569,14 @@ class SequenceFeatures(BaseModel):
             ),
         )
         
+    def flatten(self) -> dict[str, Optional[str]]:
+        return {
+            "scanning_sequence": self.scanning_sequence.value if self.scanning_sequence else None,
+            "sequence_variant": self.sequence_variant.value if self.sequence_variant else None,
+            "scan_options": self.scan_options.value if self.scan_options else None,
+            "mr_acquisition_type": self.mr_acquisition_type.value if self.mr_acquisition_type else None,
+        }
+        
 class MultiEchoFeatures(BaseModel):
     """Detection of multi-echo sequences"""
     num_echoes: Optional[int] = None
@@ -585,6 +623,13 @@ class MultiEchoFeatures(BaseModel):
             echo_times=unique_echo_times,
             echo_numbers=unique_echo_numbers,
         )
+        
+    def flatten(self) -> dict[str, Optional[int | list[float] | list[int]]]:
+        return {
+            "num_echoes": self.num_echoes,
+            "echo_times": self.echo_times if self.echo_times else None,
+            "echo_numbers": self.echo_numbers if self.echo_numbers else None,
+        }
     
 class SpatialFeatures(BaseModel):
     slice_thickness: Optional[SeriesNumericFeature] = None
@@ -617,13 +662,16 @@ class SpatialFeatures(BaseModel):
 
         pixel_spacing = None
         if any(hasattr(ds, "PixelSpacing") for ds in datasets):
-            pixel_spacing_x = SeriesNumericFeature.from_values(
-                get_tag_value(ds, "PixelSpacing", [None, None])[0] if hasattr(ds, "PixelSpacing") else None for ds in datasets # type: ignore
-            )
-            pixel_spacing_y = SeriesNumericFeature.from_values(
-                get_tag_value(ds, "PixelSpacing", [None, None])[1] if hasattr(ds, "PixelSpacing") else None for ds in datasets # type: ignore
-            )
-            pixel_spacing = (pixel_spacing_x, pixel_spacing_y)
+            try:
+                pixel_spacing_x = SeriesNumericFeature.from_values(
+                    get_tag_value(ds, "PixelSpacing", [None, None])[0] if hasattr(ds, "PixelSpacing") else None for ds in datasets # type: ignore
+                )
+                pixel_spacing_y = SeriesNumericFeature.from_values(
+                    get_tag_value(ds, "PixelSpacing", [None, None])[1] if hasattr(ds, "PixelSpacing") else None for ds in datasets # type: ignore
+                )
+                pixel_spacing = (pixel_spacing_x, pixel_spacing_y)
+            except TypeError:
+                pixel_spacing = None
 
         image_orientation = SeriesCategoricalFeature.from_values(
             get_tag_value(ds, "ImageOrientationPatient", None) for ds in datasets
@@ -635,6 +683,19 @@ class SpatialFeatures(BaseModel):
             pixel_spacing=pixel_spacing,
             image_orientation=image_orientation,
         )
+        
+    def flatten(self) -> dict[str, Optional[float | tuple[float, float] | str]]:
+        pixel_spacing_value = None
+        if (self.pixel_spacing and self.pixel_spacing[0] and self.pixel_spacing[1] and
+            self.pixel_spacing[0].value is not None and self.pixel_spacing[1].value is not None):
+            pixel_spacing_value = (self.pixel_spacing[0].value, self.pixel_spacing[1].value)
+        
+        return {
+            "slice_thickness": self.slice_thickness.value if self.slice_thickness else None,
+            "spacing_between_slices": self.spacing_between_slices.value if self.spacing_between_slices else None,
+            "pixel_spacing": pixel_spacing_value,
+            "image_orientation": self.image_orientation.value if self.image_orientation else None,
+        }
     
 class EncodingFeatures(BaseModel):
     phase_encoding_direction: Optional[SeriesCategoricalFeature] = None
@@ -702,6 +763,14 @@ class EncodingFeatures(BaseModel):
             echo_spacing=echo_spacing,
             is_epi=is_epi,
         )
+        
+    def flatten(self) -> dict[str, Optional[str | float | bool]]:
+        return {
+            "phase_encoding_direction": self.phase_encoding_direction.value if self.phase_encoding_direction else None,
+            "phase_encoding_axis": self.phase_encoding_axis.value if self.phase_encoding_axis else None,
+            "echo_spacing": self.echo_spacing.value if self.echo_spacing else None,
+            "is_epi": self.is_epi.value if self.is_epi else None,
+        }
     
 class ContrastFeatures(BaseModel):
     contrast_agent: Optional[SeriesCategoricalFeature] = None
@@ -735,6 +804,13 @@ class ContrastFeatures(BaseModel):
             injection_time=injection_time,
             signal_intensity_shift=signal_intensity_shift,
         )
+        
+    def flatten(self) -> dict[str, Optional[str | float]]:
+        return {
+            "contrast_agent": self.contrast_agent.value if self.contrast_agent else None,
+            "injection_time": self.injection_time.value if self.injection_time else None,
+            "signal_intensity_shift": self.signal_intensity_shift.value if self.signal_intensity_shift else None,
+        }
 
 class ImageTypeFeature(BaseModel):
     """Structured parsing of ImageType multi-value field"""
@@ -890,6 +966,29 @@ class ImageTypeFeature(BaseModel):
             is_real=is_real,
             is_imaginary=is_imaginary,
         )
+        
+    def flatten(self) -> dict[str, Optional[bool]]:
+        return {
+            "is_original": self.is_original.value if self.is_original else None,
+            "is_primary": self.is_primary.value if self.is_primary else None,
+            "is_localizer": self.is_localizer.value if self.is_localizer else None,
+            "is_mpr": self.is_mpr.value if self.is_mpr else None,
+            "is_mip": self.is_mip.value if self.is_mip else None,
+            "is_projection": self.is_projection.value if self.is_projection else None,
+            "is_reformatted": self.is_reformatted.value if self.is_reformatted else None,
+            "has_angio": self.has_angio.value if self.has_angio else None,
+            "has_diffusion": self.has_diffusion.value if self.has_diffusion else None,
+            "has_perfusion": self.has_perfusion.value if self.has_perfusion else None,
+            "is_adc": self.is_adc.value if self.is_adc else None,
+            "is_fa": self.is_fa.value if self.is_fa else None,
+            "is_trace": self.is_trace.value if self.is_trace else None,
+            "is_cbf": self.is_cbf.value if self.is_cbf else None,
+            "is_cbv": self.is_cbv.value if self.is_cbv else None,
+            "is_magnitude": self.is_magnitude.value if self.is_magnitude else None,
+            "is_phase": self.is_phase.value if self.is_phase else None,
+            "is_real": self.is_real.value if self.is_real else None,
+            "is_imaginary": self.is_imaginary.value if self.is_imaginary else None,
+        }
 
 class TextualMetadataFeatures(BaseModel):
     series_description: Optional[SeriesTextFeature] = None
@@ -924,6 +1023,13 @@ class TextualMetadataFeatures(BaseModel):
             protocol_name=protocol_name,
             sequence_name=sequence_name,
         )
+        
+    def flatten(self) -> dict[str, Optional[str]]:
+        return {
+            "series_description": self.series_description.text if self.series_description else None,
+            "protocol_name": self.protocol_name.text if self.protocol_name else None,
+            "sequence_name": self.sequence_name.text if self.sequence_name else None,
+        }
 
 class SeriesFeatures(BaseModel):
     series_uid: str
@@ -1122,9 +1228,45 @@ class SeriesFeatures(BaseModel):
             encoding=encoding,
             contrast=contrast,
         )
+        
+    @classmethod
+    def from_nifti_series(cls, nifti_path: str | Path) -> Self:
+        """Alternative constructor to build SeriesFeatures from a NIfTI file with sidecar JSON metadata"""
+        # json_path = Path(nifti_path).with_suffix(".json")
+        # if not json_path.exists():
+        #     raise ValueError(f"Expected JSON sidecar {json_path} not found for NIfTI file {nifti_path}")
+        # return cls.from_json(json_path)
+        
+        raise NotImplementedError("NIfTI parsing not implemented yet - would require defining a standard JSON schema for the extracted features and ensuring the NIfTI sidecar JSON files are generated in the expected format during conversion from DICOM.")
 
     @classmethod
     def from_json(cls, json_path: str | Path) -> Self:
         with open(json_path, "r") as f:
             data = json.load(f)
         return cls.model_validate(data)
+    
+    def flatten(self) -> dict[str, Optional[str | int | float | bool | tuple]]:
+        """Flatten all features into a single dictionary for easy analysis"""
+        flat = {
+            "series_uid": self.series_uid,
+            "study_uid": self.study_uid,
+            "modality": self.modality.value if self.modality else None,
+            "series_number": self.series_number.value if self.series_number else None,
+            "num_instances": self.num_instances,
+            "num_unique_slices": self.num_unique_slices,
+            "num_volumes": self.num_volumes,
+            "manufacturer": self.manufacturer.value if self.manufacturer else None,
+            "model": self.model.value if self.model else None,
+            "field_strength": self.field_strength.value if self.field_strength else None,
+        }
+        flat.update(self.temporal.flatten() if self.temporal else {})
+        flat.update(self.diffusion.flatten() if self.diffusion else {})
+        flat.update(self.perfusion.flatten() if self.perfusion else {})
+        flat.update(self.sequence.flatten() if self.sequence else {})
+        flat.update(self.multi_echo.flatten() if self.multi_echo else {})
+        flat.update(self.spatial.flatten() if self.spatial else {})
+        flat.update(self.encoding.flatten() if self.encoding else {})
+        flat.update(self.contrast.flatten() if self.contrast else {})
+        flat.update(self.image_type.flatten() if self.image_type else {})
+        flat.update(self.text.flatten() if self.text else {})
+        return flat
