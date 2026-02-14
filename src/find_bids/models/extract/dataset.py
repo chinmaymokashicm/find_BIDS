@@ -233,7 +233,7 @@ class Dataset(BaseModel):
         for subject in self.sorted_subjects:
             if not replace_existing and subject.bids_participant_id is not None:
                 continue
-            subject.bids_participant_id = f"{subject_counter:02d}"
+            subject.bids_participant_id = f"{subject_counter:04d}"
             subject_counter += 1
             for session in subject.sessions or []:
                 if not replace_existing and session.bids_session_id is not None:
@@ -284,5 +284,5 @@ class Dataset(BaseModel):
             return {}
         export_path: Path = self.features_root / "dataset.json"
         with open(export_path, "w") as f:
-            json.dump(self.model_dump(), f, indent=4)
+            json.dump(self.model_dump(mode="json"), f, indent=4)
         return self.model_dump()
