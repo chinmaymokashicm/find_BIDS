@@ -30,10 +30,12 @@ class Session(BaseModel):
     session_id: str
     path: Path
     series: Optional[list[Series]] = None
+    bids_session_id: Optional[str] = None
 
 class Subject(BaseModel):
     subject_id: str
     sessions: Optional[list[Session]] = None
+    bids_participant_id: Optional[str] = None
 
 class Dataset(BaseModel):
     dir_root: Path
@@ -216,6 +218,28 @@ class Dataset(BaseModel):
                 
         return cls(dir_root=dir_root, features_root=features_root, dtype=dtype, subjects=subjects)
     
+    def generate_bids_ids(self, replace_existing: bool = True) -> None:
+        """
+        Generate BIDS participant_id for each subject and session_id for each session in the dataset, based on their order in the sorted list of subjects and sessions. 
+        If replace_existing is False, will only generate IDs for subjects/sessions that do not already have a bids_participant_id/bids_session_id.
+        
+        Args:
+            replace_existing: If True, will replace existing BIDS IDs. If False, will only
+                generate BIDS IDs for subjects/sessions that do not already have them.
+        """
+        if self.subjects is None:
+            return
+        subject_counter = 1
+        for subject in self.sorted_subjects:
+            if not replace_existing and subject.bids_participant_id is not None:
+                continue
+            subject.bids_participant_id = f"{subject_counter:02d}"
+            subject_counter += 1
+            for session in subject.sessions or []:
+                if not replace_existing and session.bids_session_id is not None:
+                    continue
+                session.bids_session_id = f"{session.session_id}"
+    
     def generate_features(self) -> None:
         """
         Generate features for all series in the dataset and save them to the features_root directory, maintaining the same hierarchy of subject/session/series.
@@ -253,3 +277,12 @@ class Dataset(BaseModel):
         #         for series in session.series or []:
         #             features = SeriesFeatures.from_nifti_series(series.path)
         #             features_save_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
+        
+        
+    def export(self) -> dict:
+        if self.subjects is None:
+            return {}
+        export_path: Path = self.features_root / "dataset.json"
+        with open(export_path, "w") as f:
+            json.dump(self.model_dump(), f, indent=4)
+        return self.model_dump()

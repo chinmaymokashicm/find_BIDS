@@ -133,6 +133,16 @@ class SeriesNumericFeature(BaseModel):
     valid_fraction: float # Fraction of instances with valid values for this feature (0 to 1)
     stable: Optional[bool] = None # Indicates if the feature is stable across instances (e.g. low IQR relative to median)
     
+    def __eq__(self, other: Self | object) -> bool:
+        if not isinstance(other, SeriesNumericFeature):
+            return self.value == other
+        return (
+            self.value == other.value and
+            self.iqr == other.iqr and
+            self.valid_fraction == other.valid_fraction and
+            self.stable == other.stable
+        )
+    
     @classmethod
     def from_values(cls, values: Iterable[Optional[float]]) -> Self:
         """
@@ -160,6 +170,15 @@ class SeriesCategoricalFeature(BaseModel):
     category_counts: dict[str, int] # Counts of each category across instances
     consistency: Optional[float]  # Fraction of instances that match the mode category (0 to 1), indicating consistency across the series
     
+    def __eq__(self, other: Self | object) -> bool:
+        if not isinstance(other, SeriesCategoricalFeature):
+            return self.value == other
+        return (
+            self.value == other.value and
+            self.category_counts == other.category_counts and
+            self.consistency == other.consistency
+        )
+    
     @classmethod
     def from_values(cls, values: Iterable[Optional[str]]) -> Self:
         """
@@ -185,6 +204,14 @@ class SeriesBooleanFeature(BaseModel):
     value: Optional[bool]
     true_fraction: float # Fraction of instances with value True (0 to 1), indicating prevalence of the feature across the series
     
+    def __eq__(self, other: Self | object) -> bool:
+        if not isinstance(other, SeriesBooleanFeature):
+            return self.value == other
+        return (
+            self.value == other.value and
+            self.true_fraction == other.true_fraction
+        )
+    
     @classmethod
     def from_values(cls, values: Iterable[Optional[bool]]) -> Self:
         """
@@ -204,6 +231,15 @@ class SeriesTextFeature(BaseModel):
     text: str # Mode or most common text value (could be empty if no valid text)
     tokens: dict[str, int]
     valid_fraction: float # Fraction of instances with valid text values (0 to 1), indicating how often this textual feature is present across the series
+
+    def __eq__(self, other: Self | object) -> bool:
+        if not isinstance(other, SeriesTextFeature):
+            return self.text == other
+        return (
+            self.text == other.text and
+            self.tokens == other.tokens and
+            self.valid_fraction == other.valid_fraction
+        )
 
     @classmethod
     def from_values(cls, values: Iterable[Optional[str]]) -> Self:
