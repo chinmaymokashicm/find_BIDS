@@ -563,7 +563,15 @@ class MultiEchoFeatures(BaseModel):
         unique_echo_times = sorted(set(echo_times_valid)) if echo_times_valid else None
         
         echo_numbers_raw = [get_tag_value(ds, "EchoNumbers", None) for ds in datasets]
-        echo_numbers_valid = [int(en) for en in echo_numbers_raw if en is not None]
+        echo_numbers_valid = []
+        for en in echo_numbers_raw:
+            if en is not None:
+                try:
+                    en_str = multivalue_to_string(en) if isinstance(en, MultiValue) else str(en)
+                    if en_str is not None:
+                        echo_numbers_valid.append(int(en_str))
+                except (ValueError, TypeError):
+                    pass
         unique_echo_numbers = sorted(set(echo_numbers_valid)) if echo_numbers_valid else None
         
         num_echoes = (
@@ -1116,169 +1124,7 @@ class SeriesFeatures(BaseModel):
         )
 
     @classmethod
-    def from_json(cls, json_path: Path) -> Self:
+    def from_json(cls, json_path: str | Path) -> Self:
         with open(json_path, "r") as f:
             data = json.load(f)
         return cls.model_validate(data)
-        
-    
-    # @property
-    # def datatype(self) -> str:
-    #     """
-    #     Infers the BIDS datatype (e.g., anat, func, dwi) based on the extracted features of the series.
-    #     """
-    #     UNKNOWN = "unknown"
-    #     if self.modality and self.modality.value:
-    #         if self.modality.value.lower() not in ['mr', 'mri']:
-    #             return UNKNOWN
-    #         if self.has_diffusion_gradients():
-    #             return "dwi"
-    #         if self.is_perfusion():
-    #             return "perf"
-    #         if self.is_time_series():
-    #             return "func"
-    #         else:
-    #             return "anat"
-    #     return UNKNOWN
-    
-    # @property
-    # def suffix(self) -> Optional[str]:
-    #     """
-    #     Infers the BIDS suffix (e.g., T1w, bold, dwi) based on the extracted features of the series.
-    #     """
-    #     if self.datatype == 'anat':
-    #         if self.matches_t1_physics():
-    #             return "T1w"
-    #         if self.matches_t2_physics():
-    #             return "T2w"
-    #         if self.matches_flair_physics():
-    #             return "FLAIR"
-    #         if self.is_swi():
-    #             return "SWI"
-    #     elif self.datatype == 'func':
-    #         if self.is_bold():
-    #             return "bold"
-    #     elif self.datatype == 'dwi':
-    #         return "dwi"
-    #     elif self.datatype == 'perf':
-    #         if self.is_dsc():
-    #             return "dsc"
-    #         if self.is_dce():
-    #             return "dce"
-    #         if self.is_asl():
-    #             return "asl"
-    #     return None
-    
-    # @property
-    # def ce(self) -> Optional[str]:
-    #     """
-    #     Infers the BIDS contrast enhancement (ce) entity based on the presence of contrast agent information in the features.
-    #     This can be used as part of the logic to infer the suffix for perfusion scans or contrast-enhanced anatomical scans.
-    #     """
-    #     if self.datatype in ["anat", "perf"]:
-    #         if self.explicit_contrast_tag():
-    #             return "C+"
-    #         elif  self.classifiers and self.classifiers.contrast_classifier and self.classifiers.contrast_classifier.predict(self) > 0.5: # Assuming the contrast_classifier returns a probability of being contrast-enhanced
-    #             return "C+"
-    #         else:
-    #             return "C-" # Explicitly return "C-" when we have a classifier that predicts non-contrast, to differentiate from cases where we have no information at all
-    #     return None
-    
-    # @property
-    # def task(self) -> Optional[str]:
-    #     """
-    #     Infers the BIDS task entity for functional scans based on textual metadata features such as SeriesDescription and ProtocolName.
-    #     This can be used as part of the logic to further specify the suffix for functional scans (e.g., task-rest, task-nback).
-    #     """
-    #     if self.datatype == 'func' and (self.series_description or self.protocol_name):
-    #         # Logic to analyze textual metadata and infer task name would go here
-    #         pass
-    #     return None
-    
-    # def has_diffusion_gradients(self) -> bool:
-    #     """
-    #     Determines if the series contains diffusion gradients based on the presence of b-values and the has_diffusion feature.
-    #     This can be used as part of the logic to infer the suffix 'dwi' for diffusion-weighted scans.
-    #     """
-    #     return self.diffusion is not None and self.diffusion.has_diffusion is not None and self.diffusion.has_diffusion.value == True
-    
-    # def is_perfusion(self) -> bool:
-    #     """
-    #     Determines if the series is a perfusion scan based on features such as ASL labeling type, bolus arrival time, and contrast agent information.
-    #     This can be used as part of the logic to infer the suffix 'perf' for perfusion scans.
-    #     """
-    #     return self.perfusion is not None and (self.perfusion.asl_labeling_type is not None or self.perfusion.bolus_arrival_time is not None or self.perfusion.contrast_agent is not None)
-    
-    # def is_time_series(self) -> bool:
-    #     """
-    #     Determines if the series is a time series (e.g., functional MRI) based on temporal features such as repetition time and number of timepoints.
-    #     This can be used as part of the logic to infer the suffix 'bold' for functional scans.
-    #     """
-    #     return self.temporal is not None and self.temporal.repetition_time is not None and self.temporal.num_timepoints is not None and self.temporal.num_timepoints > 1
-    
-    # def matches_t1_physics(self) -> bool:
-    #     """
-    #     Determines if the series matches typical T1-weighted anatomical scan characteristics based on its features.
-    #     This can be used as part of the logic to infer the suffix 'T1w' for anatomical scans.
-    #     """
-    #     # Logic to check if features match typical T1-weighted scan characteristics would go here
-    #     pass
-    
-    # def matches_t2_physics(self) -> bool:
-    #     """
-    #     Determines if the series matches typical T2-weighted anatomical scan characteristics based on its features.
-    #     This can be used as part of the logic to infer the suffix 'T2w' for anatomical scans.
-    #     """
-    #     # Logic to check if features match typical T2-weighted scan characteristics would go here
-    #     pass
-    
-    # def matches_flair_physics(self) -> bool:
-    #     """
-    #     Determines if the series matches typical FLAIR anatomical scan characteristics based on its features.
-    #     This can be used as part of the logic to infer the suffix 'FLAIR' for anatomical scans.
-    #     """
-    #     # Logic to check if features match typical FLAIR scan characteristics would go here
-    #     pass
-    
-    # def is_swi(self) -> bool:
-    #     """
-    #     Determines if the series matches typical SWI (Susceptibility Weighted Imaging) scan characteristics based on its features.
-    #     This can be used as part of the logic to infer the suffix 'SWI' for anatomical scans.
-    #     """
-    #     # Logic to check if features match typical SWI scan characteristics would go here
-    #     pass
-    
-    # def is_bold(self) -> bool:
-    #     """
-    #     Determines if the series is a functional MRI scan (i.e., has the 'bold' suffix) based on its temporal features.
-    #     This can be used as part of the logic to infer the suffix 'bold' for functional scans.
-    #     """
-    #     return self.datatype == 'func' and self.temporal is not None and self.temporal.repetition_time is not None and self.temporal.num_timepoints is not None and self.temporal.num_timepoints > 1
-    
-    # def is_dsc(self) -> bool:
-    #     """
-    #     Determines if the series is a DSC (Dynamic Susceptibility Contrast) perfusion scan based on its features.
-    #     This can be used as part of the logic to infer the suffix 'dsc' for perfusion scans.
-    #     """
-    #     return self.perfusion is not None and self.perfusion.perfusion_series_type is not None and self.perfusion.perfusion_series_type.lower() == 'dsc'
-    
-    # def is_dce(self) -> bool:
-    #     """
-    #     Determines if the series is a DCE (Dynamic Contrast Enhanced) perfusion scan based on its features.
-    #     This can be used as part of the logic to infer the suffix 'dce' for perfusion scans.
-    #     """
-    #     return self.perfusion is not None and self.perfusion.perfusion_series_type is not None and self.perfusion.perfusion_series_type.lower() == 'dce'
-    
-    # def is_asl(self) -> bool:
-    #     """
-    #     Determines if the series is an ASL (Arterial Spin Labeling) perfusion scan based on its features.
-    #     This can be used as part of the logic to infer the suffix 'asl' for perfusion scans.
-    #     """
-    #     return self.perfusion is not None and self.perfusion.asl_labeling_type is not None
-    
-    # def explicit_contrast_tag(self) -> bool:
-    #     """
-    #     Checks for the presence of explicit contrast agent information in the features, which can be a strong indicator of contrast-enhanced scans.
-    #     This can be used as part of the logic to infer the ce (contrast enhancement) entity for both anatomical and perfusion scans.
-    #     """
-    #     return self.contrast is not None and self.contrast.contrast_agent is not None and self.contrast.contrast_agent.value is not None
