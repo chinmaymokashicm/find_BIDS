@@ -235,10 +235,12 @@ class Dataset(BaseModel):
                 continue
             subject.bids_participant_id = f"{subject_counter:04d}"
             subject_counter += 1
+            session_counter = 1
             for session in subject.sessions or []:
                 if not replace_existing and session.bids_session_id is not None:
                     continue
-                session.bids_session_id = f"{session.session_id}"
+                session.bids_session_id = f"{session_counter:04d}"
+                session_counter += 1
     
     def generate_features(self) -> None:
         """
