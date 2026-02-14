@@ -145,5 +145,3 @@
     - and do not explicitly follow the BIDS hierarchy (datatype → suffix → entities).
 
 ***
-
-If you want, the next step could be to draft **Methods** as a similarly structured section: series‑level feature extraction, hierarchical rule/ML pipeline for datatype and suffix, and a simple entity‑inference strategy, explicitly noting where voxel fallback is triggered.
