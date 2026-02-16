@@ -89,6 +89,35 @@ def parse_dicom_time(time_str: Optional[str]) -> Optional[float]:
     except Exception:
         return None
 
+def parse_dicom_datetime(datetime_str: Optional[str]) -> Optional[Any]:
+    """Parse DICOM datetime string (format: YYYYMMDDHHMMSS.FFFFFF) into a datetime object"""
+    if datetime_str is None:
+        return None
+    try:
+        from datetime import datetime
+        if isinstance(datetime_str, str):
+            # Remove fractional seconds if present
+            if "." in datetime_str:
+                datetime_str = datetime_str.split(".")[0]
+            return datetime.strptime(datetime_str, "%Y%m%d%H%M%S")
+        return None
+    except Exception:
+        return None
+
+def parse_dicom_date_time(date_str: Optional[str], time_str: Optional[str]) -> Optional[Any]:
+    """Parse DICOM date (YYYYMMDD) and time (HHMMSS.FFFFFF) strings into a datetime object"""
+    if date_str is None or time_str is None:
+        return None
+    try:
+        from datetime import datetime
+        # Remove fractional seconds if present
+        if "." in time_str:
+            time_str = time_str.split(".")[0]
+        datetime_combined = f"{date_str}{time_str}"
+        return datetime.strptime(datetime_combined, "%Y%m%d%H%M%S")
+    except Exception:
+        return None
+
 def get_tag_value(ds: dicom.Dataset, tag: str, default=None) -> Optional[Any]:
     if hasattr(ds, tag):
         return getattr(ds, tag)
@@ -1252,7 +1281,7 @@ class TextualMetadataFeatures(BaseModel):
 class AcquisitionFeatures(BaseModel):
     acquisition_time: Optional[SeriesNumericFeature] = None
     series_time: Optional[SeriesNumericFeature] = None
-    acquisition_order: Optional[float] = None  # median timestamp
+    acquisition_order: Optional[float] = None  # POSIX timestamp
 
     def __str__(self) -> str:
         return format_section(
@@ -1260,7 +1289,7 @@ class AcquisitionFeatures(BaseModel):
             [
                 ("Acquisition time (median)", self.acquisition_time),
                 ("Series time (median)", self.series_time),
-                ("Acquisition order (timestamp)", self.acquisition_order),
+                ("Acquisition order (POSIX timestamp)", self.acquisition_order),
             ],
         )
     
@@ -1268,24 +1297,71 @@ class AcquisitionFeatures(BaseModel):
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
         datasets = list(datasets)
 
+        datetimes = []
+
+        for ds in datasets:
+
+            # Best case: AcquisitionDateTime
+            dt = get_tag_value(ds, "AcquisitionDateTime", None)
+            if dt:
+                parsed = parse_dicom_datetime(dt)
+                if parsed:
+                    datetimes.append(parsed)
+                continue
+
+            # AcquisitionDate + AcquisitionTime
+            date = get_tag_value(ds, "AcquisitionDate", None)
+            time = get_tag_value(ds, "AcquisitionTime", None)
+
+            if date and time:
+                parsed = parse_dicom_date_time(date, time)
+                if parsed:
+                    datetimes.append(parsed)
+                continue
+
+            # SeriesDate + SeriesTime
+            date = get_tag_value(ds, "SeriesDate", None)
+            time = get_tag_value(ds, "SeriesTime", None)
+
+            if date and time:
+                parsed = parse_dicom_date_time(date, time)
+                if parsed:
+                    datetimes.append(parsed)
+                continue
+
+            # StudyDate + StudyTime
+            date = get_tag_value(ds, "StudyDate", None)
+            time = get_tag_value(ds, "StudyTime", None)
+
+            if date and time:
+                parsed = parse_dicom_date_time(date, time)
+                if parsed:
+                    datetimes.append(parsed)
+
+        # Representative timestamp
+        acquisition_order = None
+        if datetimes:
+            datetimes_sorted = sorted(datetimes)
+            median_dt = datetimes_sorted[len(datetimes_sorted) // 2]
+            acquisition_order = median_dt.timestamp()
+
+        # Keep numeric features for analysis/debug
         acq_times = [
             parse_dicom_time(get_tag_value(ds, "AcquisitionTime", None))
             for ds in datasets
         ]
-
         acq_feature = SeriesNumericFeature.from_values(acq_times)
-        
+
         series_times = [
             parse_dicom_time(get_tag_value(ds, "SeriesTime", None))
-            for ds in datasets        ]
+            for ds in datasets
+        ]
         series_feature = SeriesNumericFeature.from_values(series_times)
-
-        acquisition_order = acq_feature.value
 
         return cls(
             acquisition_time=acq_feature,
             series_time=series_feature,
-            acquisition_order=acquisition_order
+            acquisition_order=acquisition_order,
         )
     
     def flatten(self) -> dict[str, Optional[float]]:
