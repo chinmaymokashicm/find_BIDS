@@ -259,6 +259,112 @@ class SeriesTextFeature(BaseModel):
         valid_fraction = len(valid_texts) / len(values_list)
         return cls(text=mode_text, tokens=token_counts, valid_fraction=valid_fraction)
 
+class GeometryFeatures(BaseModel):
+    rows: Optional[SeriesNumericFeature] = None
+    columns: Optional[SeriesNumericFeature] = None
+    num_slices: Optional[int] = None
+    voxel_size: Optional[tuple[float, float, float]] = None
+    matrix_size: Optional[tuple[int, int, int]] = None
+    geometry_hash: Optional[str] = None
+
+    def __str__(self) -> str:
+        return format_section(
+            "Geometry Features",
+            [
+                ("Rows", self.rows),
+                ("Columns", self.columns),
+                ("Number of slices", self.num_slices),
+                ("Voxel size (mm)", self.voxel_size),
+                ("Matrix size (voxels)", self.matrix_size),
+                ("Geometry hash", self.geometry_hash),
+            ],
+        )
+    
+    @classmethod
+    def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
+        datasets = list(datasets)
+
+        rows = SeriesNumericFeature.from_values(
+            get_tag_value(ds, "Rows", None) for ds in datasets
+        )
+        columns = SeriesNumericFeature.from_values(
+            get_tag_value(ds, "Columns", None) for ds in datasets
+        )
+
+        slice_positions = [
+            get_tag_value(ds, "ImagePositionPatient", None)
+            for ds in datasets
+        ]
+        num_slices = len(set(str(p) for p in slice_positions if p is not None)) or None
+
+        dx = dy = dz = None
+        if rows.value and columns.value:
+            # px = SeriesNumericFeature.from_values(
+            #     get_tag_value(ds, "PixelSpacing", [None, None])[0]
+            #     if hasattr(ds, "PixelSpacing") else None
+            #     for ds in datasets
+            # )
+            # py = SeriesNumericFeature.from_values(
+            #     get_tag_value(ds, "PixelSpacing", [None, None])[1]
+            #     if hasattr(ds, "PixelSpacing") else None
+            #     for ds in datasets
+            # )
+            # dz = SeriesNumericFeature.from_values(
+            #     get_tag_value(ds, "SliceThickness", None)
+            #     for ds in datasets
+            # )
+
+            # if px.value and py.value and dz.value:
+            #     dx = px.value
+            #     dy = py.value
+            #     dz = dz.value
+            for ds in datasets:
+                if hasattr(ds, "PixelSpacing") and hasattr(ds, "SliceThickness"):
+                    ps = get_tag_value(ds, "PixelSpacing", [None, None])
+                    st = get_tag_value(ds, "SliceThickness", None)
+                    if ps and len(ps) == 2 and st:
+                        try:
+                            dx_candidate = float(ps[0])
+                            dy_candidate = float(ps[1])
+                            dz_candidate = float(st)
+                            if dx_candidate > 0 and dy_candidate > 0 and dz_candidate > 0:
+                                dx = dx_candidate
+                                dy = dy_candidate
+                                dz = dz_candidate
+                                break
+                        except (ValueError, TypeError):
+                            continue
+
+        voxel_size = (dx, dy, dz) if dx and dy and dz else None
+        matrix_size = (
+            int(rows.value),
+            int(columns.value),
+            num_slices
+        ) if rows.value and columns.value and num_slices else None
+
+        geometry_hash = None
+        if matrix_size and voxel_size:
+            geometry_hash = hash((matrix_size, voxel_size))
+
+        return cls(
+            rows=rows,
+            columns=columns,
+            num_slices=num_slices,
+            voxel_size=voxel_size,
+            matrix_size=matrix_size,
+            geometry_hash=str(geometry_hash) if geometry_hash else None
+        )
+        
+    def flatten(self) -> dict[str, Optional[int | float | tuple[int, int, int] | tuple[float, float, float] | str]]:
+        return {
+            "rows": self.rows.value if self.rows else None,
+            "columns": self.columns.value if self.columns else None,
+            "num_slices": self.num_slices,
+            "voxel_size": self.voxel_size,
+            "matrix_size": self.matrix_size,
+            "geometry_hash": self.geometry_hash,
+        }
+
 class TemporalFeatures(BaseModel):
     repetition_time: Optional[SeriesNumericFeature] = None
     echo_time: Optional[SeriesNumericFeature] = None
@@ -267,6 +373,11 @@ class TemporalFeatures(BaseModel):
 
     num_timepoints: Optional[int] = None
     temporal_variation: Optional[SeriesNumericFeature] = None  # seconds
+    tr_bucket: Optional[str] = None  # e.g. "short", "medium", "long" based on typical TR ranges for fMRI, structural, etc.
+    te_bucket: Optional[str] = None  # e.g. "short", "medium", "long" based on typical TE ranges for different sequence types
+    is_3D: Optional[bool] = None  # Inferred from geometry features or specific DICOM tags
+    is_isotropic: Optional[bool] = None  # Inferred from geometry features (e.g. equal voxel dimensions)
+    echo_train_length: Optional[SeriesNumericFeature] = None  # For sequences with multiple echoes, the number of echoes acquired
 
     def __str__(self) -> str:
         return format_section(
@@ -278,11 +389,16 @@ class TemporalFeatures(BaseModel):
                 ("Flip angle", self.flip_angle),
                 ("Number of timepoints", self.num_timepoints),
                 ("Temporal variation (s)", self.temporal_variation),
+                ("TR bucket", self.tr_bucket),
+                ("TE bucket", self.te_bucket),
+                ("Is 3D", self.is_3D),
+                ("Is isotropic", self.is_isotropic),
+                ("Echo train length", self.echo_train_length),
             ],
         )
     
     @classmethod
-    def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
+    def from_datasets(cls, datasets: Iterable[dicom.Dataset], geometry: Optional[GeometryFeatures] = None) -> Self:
         datasets = list(datasets)
 
         repetition_time = SeriesNumericFeature.from_values(
@@ -338,6 +454,60 @@ class TemporalFeatures(BaseModel):
             ]
             if deltas:
                 temporal_variation = SeriesNumericFeature.from_values(deltas)
+                
+        # ----------------------------
+        # TR bucket (ms)
+        # ----------------------------
+        tr_bucket = None
+        if repetition_time.value is not None:
+            tr = repetition_time.value
+            if tr < 1000:
+                tr_bucket = "short"      # fast EPI
+            elif tr < 3000:
+                tr_bucket = "medium"     # standard fMRI
+            else:
+                tr_bucket = "long"       # structural or slow
+
+        # ----------------------------
+        # TE bucket (ms)
+        # ----------------------------
+        te_bucket = None
+        if echo_time.value is not None:
+            te = echo_time.value * 1000 if echo_time.value < 10 else echo_time.value
+            # handle seconds vs ms ambiguity
+
+            if te < 30:
+                te_bucket = "short"
+            elif te < 80:
+                te_bucket = "medium"
+            else:
+                te_bucket = "long"
+        
+        echo_train_length = SeriesNumericFeature.from_values(
+            get_tag_value(ds, "EchoTrainLength", None)
+            for ds in datasets
+        )
+
+        # ----------------------------
+        # Geometry-derived flags
+        # ----------------------------
+        is_3D = None
+        is_isotropic = None
+
+        if geometry:
+            if geometry.num_slices and num_timepoints:
+                is_3D = False
+            elif geometry.num_slices and not num_timepoints:
+                is_3D = True
+
+            if geometry.voxel_size:
+                dx, dy, dz = geometry.voxel_size
+                if dx and dy and dz:
+                    tol = 0.1
+                    is_isotropic = (
+                        abs(dx - dy) < tol and
+                        abs(dx - dz) < tol
+                    )
 
         return cls(
             repetition_time=repetition_time,
@@ -346,9 +516,14 @@ class TemporalFeatures(BaseModel):
             flip_angle=flip_angle,
             num_timepoints=num_timepoints,
             temporal_variation=temporal_variation,
+            tr_bucket=tr_bucket,
+            te_bucket=te_bucket,
+            is_3D=is_3D,
+            is_isotropic=is_isotropic,
+            echo_train_length=echo_train_length,
         )
         
-    def flatten(self) -> dict[str, Optional[float]]:
+    def flatten(self) -> dict[str, Optional[float | int | str | bool]]:
         return {
             "repetition_time": self.repetition_time.value if self.repetition_time else None,
             "echo_time": self.echo_time.value if self.echo_time else None,
@@ -356,6 +531,10 @@ class TemporalFeatures(BaseModel):
             "flip_angle": self.flip_angle.value if self.flip_angle else None,
             "num_timepoints": self.num_timepoints,
             "temporal_variation": self.temporal_variation.value if self.temporal_variation else None,
+            "tr_bucket": self.tr_bucket,
+            "te_bucket": self.te_bucket,
+            "is_3D": self.is_3D,
+            "is_isotropic": self.is_isotropic,
         }
 
 class DiffusionFeatures(BaseModel):
@@ -618,6 +797,8 @@ class MultiEchoFeatures(BaseModel):
             else None
         )
         
+        is_multi_echo = num_echoes is not None and num_echoes > 1
+        
         return cls(
             num_echoes=num_echoes,
             echo_times=unique_echo_times,
@@ -700,8 +881,13 @@ class SpatialFeatures(BaseModel):
 class EncodingFeatures(BaseModel):
     phase_encoding_direction: Optional[SeriesCategoricalFeature] = None
     phase_encoding_axis: Optional[SeriesCategoricalFeature] = None
+    phase_encoding_polarity: Optional[SeriesCategoricalFeature] = None  # Siemens private tag for direction polarity
     echo_spacing: Optional[SeriesNumericFeature] = None
-    is_epi: Optional[SeriesBooleanFeature] = None
+    # is_epi: Optional[SeriesBooleanFeature] = None
+    
+    parallel_reduction_factor_in_plane: Optional[SeriesNumericFeature] = None
+    parallel_reduction_factor_out_of_plane: Optional[SeriesNumericFeature] = None
+    multiband_factor: Optional[SeriesNumericFeature] = None
     
     def __str__(self) -> str:
         return format_section(
@@ -709,8 +895,12 @@ class EncodingFeatures(BaseModel):
             [
                 ("Phase encoding direction", self.phase_encoding_direction),
                 ("Phase encoding axis", self.phase_encoding_axis),
+                ("Phase encoding polarity", self.phase_encoding_polarity),
                 ("Echo spacing", self.echo_spacing),
-                ("Is EPI", self.is_epi),
+                # ("Is EPI", self.is_epi),
+                ("Parallel reduction factor (in-plane)", self.parallel_reduction_factor_in_plane),
+                ("Parallel reduction factor (out-of-plane)", self.parallel_reduction_factor_out_of_plane),
+                ("Multiband factor", self.multiband_factor),
             ],
         )
     
@@ -726,6 +916,11 @@ class EncodingFeatures(BaseModel):
         echo_spacing = SeriesNumericFeature.from_values(
             get_tag_value(ds, "EchoSpacing", None) for ds in datasets
         )
+        phase_encoding_polarity = SeriesCategoricalFeature.from_values(
+            get_tag_value(ds, "PhaseEncodingDirection", None)  # Siemens private tag
+            for ds in datasets
+        )
+
         
         # Robust EPI detection (multi-vendor)
         is_epi_flags = []
@@ -737,39 +932,62 @@ class EncodingFeatures(BaseModel):
             if vendor is None:
                 vendor = "N/A"
             
-            # Vendor-agnostic EPI signals
-            is_epi_seq = (
-                "ep" in seq_name or                    # ep2d, ep3d, epi, ep_bold, etc.
-                "echo planar" in seq_name or           # full name
-                scanning_seq == "ep" or                # DICOM standard
-                "epi" in seq_name                      # generic
-            )
+        #     # Vendor-agnostic EPI signals
+        #     is_epi_seq = (
+        #         "ep" in seq_name or                    # ep2d, ep3d, epi, ep_bold, etc.
+        #         "echo planar" in seq_name or           # full name
+        #         scanning_seq == "ep" or                # DICOM standard
+        #         "epi" in seq_name                      # generic
+        #     )
             
-            # Vendor-specific patterns (fallback)
-            vendor_specific = (
-                ("ep2d" in seq_name) or                # Siemens
-                ("ep" in seq_name and "ge" in vendor.lower()) or  # GE
-                ("epifmri" in seq_name) or             # Philips common
-                ("ep" in seq_name and "philips" in vendor.lower())
-            )
+        #     # Vendor-specific patterns (fallback)
+        #     vendor_specific = (
+        #         ("ep2d" in seq_name) or                # Siemens
+        #         ("ep" in seq_name and "ge" in vendor.lower()) or  # GE
+        #         ("epifmri" in seq_name) or             # Philips common
+        #         ("ep" in seq_name and "philips" in vendor.lower())
+        #     )
             
-            is_epi_flags.append(is_epi_seq or vendor_specific)
+        #     is_epi_flags.append(is_epi_seq or vendor_specific)
         
-        is_epi = SeriesBooleanFeature.from_values(is_epi_flags)
+        # is_epi = SeriesBooleanFeature.from_values(is_epi_flags)
+        
+        parallel_reduction_factor = SeriesNumericFeature.from_values(
+            get_tag_value(ds, "ParallelReductionFactorInPlane", None)
+            for ds in datasets
+        )
+        
+        parallel_reduction_factor_out_of_plane = SeriesNumericFeature.from_values(
+            get_tag_value(ds, "ParallelReductionFactorOutOfPlane", None)
+            for ds in datasets
+        )
+
+        multiband_factor = SeriesNumericFeature.from_values(
+            get_tag_value(ds, "MultibandAccelerationFactor", None)
+            for ds in datasets
+        )
         
         return cls(
             phase_encoding_direction=phase_encoding_direction,
             phase_encoding_axis=phase_encoding_axis,
+            phase_encoding_polarity=phase_encoding_polarity,
             echo_spacing=echo_spacing,
-            is_epi=is_epi,
+            # is_epi=is_epi,
+            parallel_reduction_factor_in_plane=parallel_reduction_factor,
+            parallel_reduction_factor_out_of_plane=parallel_reduction_factor_out_of_plane,
+            multiband_factor=multiband_factor,
         )
         
     def flatten(self) -> dict[str, Optional[str | float | bool]]:
         return {
             "phase_encoding_direction": self.phase_encoding_direction.value if self.phase_encoding_direction else None,
             "phase_encoding_axis": self.phase_encoding_axis.value if self.phase_encoding_axis else None,
+            "phase_encoding_polarity": self.phase_encoding_polarity.value if self.phase_encoding_polarity else None,
             "echo_spacing": self.echo_spacing.value if self.echo_spacing else None,
-            "is_epi": self.is_epi.value if self.is_epi else None,
+            # "is_epi": self.is_epi.value if self.is_epi else None,
+            "parallel_reduction_factor_in_plane": self.parallel_reduction_factor_in_plane.value if self.parallel_reduction_factor_in_plane else None,
+            "parallel_reduction_factor_out_of_plane": self.parallel_reduction_factor_out_of_plane.value if self.parallel_reduction_factor_out_of_plane else None,
+            "multiband_factor": self.multiband_factor.value if self.multiband_factor else None,
         }
     
 class ContrastFeatures(BaseModel):
@@ -1031,6 +1249,52 @@ class TextualMetadataFeatures(BaseModel):
             "sequence_name": self.sequence_name.text if self.sequence_name else None,
         }
 
+class AcquisitionFeatures(BaseModel):
+    acquisition_time: Optional[SeriesNumericFeature] = None
+    series_time: Optional[SeriesNumericFeature] = None
+    acquisition_order: Optional[float] = None  # median timestamp
+
+    def __str__(self) -> str:
+        return format_section(
+            "Acquisition Features",
+            [
+                ("Acquisition time (median)", self.acquisition_time),
+                ("Series time (median)", self.series_time),
+                ("Acquisition order (timestamp)", self.acquisition_order),
+            ],
+        )
+    
+    @classmethod
+    def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
+        datasets = list(datasets)
+
+        acq_times = [
+            parse_dicom_time(get_tag_value(ds, "AcquisitionTime", None))
+            for ds in datasets
+        ]
+
+        acq_feature = SeriesNumericFeature.from_values(acq_times)
+        
+        series_times = [
+            parse_dicom_time(get_tag_value(ds, "SeriesTime", None))
+            for ds in datasets        ]
+        series_feature = SeriesNumericFeature.from_values(series_times)
+
+        acquisition_order = acq_feature.value
+
+        return cls(
+            acquisition_time=acq_feature,
+            series_time=series_feature,
+            acquisition_order=acquisition_order
+        )
+    
+    def flatten(self) -> dict[str, Optional[float]]:
+        return {
+            "acquisition_time": self.acquisition_time.value if self.acquisition_time else None,
+            "series_time": self.series_time.value if self.series_time else None,
+            "acquisition_order": self.acquisition_order,
+        }
+
 class SeriesFeatures(BaseModel):
     series_uid: str
     study_uid: str
@@ -1045,6 +1309,7 @@ class SeriesFeatures(BaseModel):
     model: Optional[SeriesCategoricalFeature] = None
     field_strength: Optional[SeriesNumericFeature] = None
     
+    geometry: Optional[GeometryFeatures] = None
     temporal: Optional[TemporalFeatures] = None
     diffusion: Optional[DiffusionFeatures] = None
     perfusion: Optional[PerfusionFeatures] = None
@@ -1055,6 +1320,7 @@ class SeriesFeatures(BaseModel):
     contrast: Optional[ContrastFeatures] = None
     image_type: Optional[ImageTypeFeature] = None
     text: Optional[TextualMetadataFeatures] = None
+    acquisition: Optional[AcquisitionFeatures] = None
     
     def __str__(self) -> str:
         lines = [
@@ -1079,6 +1345,7 @@ class SeriesFeatures(BaseModel):
             lines.append(f"  {label}:")
             lines.append(indent_block(str(obj), 4))
 
+        add_block("Geometry", self.geometry)
         add_block("Temporal", self.temporal)
         add_block("Diffusion", self.diffusion)
         add_block("Perfusion", self.perfusion)
@@ -1089,7 +1356,8 @@ class SeriesFeatures(BaseModel):
         add_block("Contrast", self.contrast)
         add_block("Image type", self.image_type)
         add_block("Text", self.text)
-
+        add_block("Acquisition", self.acquisition)
+        
         return "\n".join(lines)
     
     @classmethod
@@ -1155,11 +1423,16 @@ class SeriesFeatures(BaseModel):
         modality = SeriesCategoricalFeature.from_values(
             get_tag_value(ds, "Modality", None) for ds in datasets
         )
+        
+        # -----------------------
+        # Geometry features
+        # -----------------------
+        geometry = GeometryFeatures.from_datasets(datasets)
 
         # -----------------------
         # Temporal features
         # -----------------------
-        temporal = TemporalFeatures.from_datasets(datasets)
+        temporal = TemporalFeatures.from_datasets(datasets, geometry=geometry)
 
         # -----------------------
         # Diffusion features
@@ -1205,6 +1478,11 @@ class SeriesFeatures(BaseModel):
         # Textual metadata
         # -----------------------
         text = TextualMetadataFeatures.from_datasets(datasets)
+        
+        # -----------------------
+        # Acquisition features
+        # -----------------------
+        acquisition = AcquisitionFeatures.from_datasets(datasets)        
 
         return cls(
             series_uid=series_uid,
@@ -1217,16 +1495,18 @@ class SeriesFeatures(BaseModel):
             manufacturer=manufacturer,
             model=model,
             field_strength=field_strength,
+            geometry=geometry,
             temporal=temporal,
             spatial=spatial,
             diffusion=diffusion,
             image_type=image_type,
-            text=text,
             perfusion=perfusion,
             sequence=sequence,
             multi_echo=multi_echo,
             encoding=encoding,
             contrast=contrast,
+            text=text,
+            acquisition=acquisition,
         )
         
     @classmethod
@@ -1259,6 +1539,7 @@ class SeriesFeatures(BaseModel):
             "model": self.model.value if self.model else None,
             "field_strength": self.field_strength.value if self.field_strength else None,
         }
+        flat.update(self.geometry.flatten() if self.geometry else {})
         flat.update(self.temporal.flatten() if self.temporal else {})
         flat.update(self.diffusion.flatten() if self.diffusion else {})
         flat.update(self.perfusion.flatten() if self.perfusion else {})
@@ -1269,4 +1550,6 @@ class SeriesFeatures(BaseModel):
         flat.update(self.contrast.flatten() if self.contrast else {})
         flat.update(self.image_type.flatten() if self.image_type else {})
         flat.update(self.text.flatten() if self.text else {})
+        flat.update(self.acquisition.flatten() if self.acquisition else {})
+        
         return flat
