@@ -24,7 +24,7 @@ dataset_info: dict[str, dict] = {
 }
 
 datasets = []
-for _, paths in dataset_info.items():
+for dataset_name, paths in dataset_info.items():
     with ThreadPoolExecutor() as executor:
         dir_root: Path = paths["dicom_root"]
         features_root: Path = paths["features_root"]
@@ -38,6 +38,7 @@ for _, paths in dataset_info.items():
                 session_subdir_path=paths["session_subdir_path"],
                 series_subdir_path=paths["series_subdir_path"]
             )
+            print(f"Submitted task for {dataset_name} dataset with subject-level structure: {dir_root}")
         else:
             future = executor.submit(
                 Dataset.from_dir_without_subject_level,
@@ -47,6 +48,7 @@ for _, paths in dataset_info.items():
                 session_subdir_path=paths["session_subdir_path"],
                 series_subdir_path=paths["series_subdir_path"]
             )
+            print(f"Submitted task for {dataset_name} dataset with session-level structure: {dir_root}")
         dataset = future.result()
     dataset.generate_bids_ids(replace_existing=True)
     dataset.to_json()
