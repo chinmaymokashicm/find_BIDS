@@ -1,4 +1,4 @@
-from find_bids.models.extract import dataset
+from src.find_bids.models.extract import dataset
 from src.find_bids.models.extract.dataset import Dataset
 
 from pathlib import Path
