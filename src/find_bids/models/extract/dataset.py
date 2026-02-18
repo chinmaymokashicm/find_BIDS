@@ -49,6 +49,10 @@ class Dataset(BaseModel):
             return []
         return sorted(self.subjects, key=lambda s: s.subject_id)
     
+    @property
+    def csv_export_path(self) -> Path:
+        return self.features_root / "features.csv"
+    
     @staticmethod
     def validate_dicom_dir(dir_path: Path) -> bool:
         """
@@ -76,7 +80,7 @@ class Dataset(BaseModel):
         return len(nifti_files) > 0
     
     @classmethod
-    def from_dir_with_session_level(
+    def from_dir_with_subject_level(
         cls,
         dir_root: str | Path,
         features_root: str | Path,
@@ -88,11 +92,17 @@ class Dataset(BaseModel):
         """
         Recursively traverse the directory structure starting from dir_root, and construct the nested Subject > Session > Series hierarchy based on the provided subdirectory paths.
 
-        The paths refer to the subdir paths relative to dir_root, to be appended to the parent directory path at each level.
-        
-        subject_dir = dir_root / subject_id
-        session_dir = [session_dir / session_subdir_path for session_dir in subject_dir.iterdir() if session_dir.is_dir()]
-        series_dir = [session_dir / series_subdir_path for session_dir in session_dirs for series_dir in session_dir.iterdir() if series_dir.is_dir()]
+        The directory structure is assumed to be:
+        dir_root -|
+            subject_id_1 -|
+                session_id_1 -|
+                    series_id_1 -| (DICOM or Nifti files)
+                    series_id_2 -| (DICOM or Nifti files)
+                session_id_2 -|
+                    series_id_3 -| (DICOM or Nifti files)
+            subject_id_2 -|
+                session_id_3 -|
+                    series_id_4 -| (DICOM or Nifti files)
         
         Args:
             dir_root: The root directory of the dataset.
@@ -146,7 +156,6 @@ class Dataset(BaseModel):
                 subjects.append(Subject(subject_id=subject_id, sessions=sessions))
                 progress.advance(task_id)
         
-        
         return cls(dir_root=dir_root, features_root=features_root, dtype=dtype, subjects=subjects)
     
     @classmethod
@@ -163,10 +172,13 @@ class Dataset(BaseModel):
         Similar to from_dir_with_session_level, but assumes there is no subject level in the directory structure. The hierarchy is Session > Series.
         Session ID is assumed to be XXXX-XXXX-XXXX-XXXX, and subject ID is derived from the session ID by taking the first 2 segments (e.g. XXXX-XXXX).
 
-        The paths refer to the subdir paths relative to dir_root, to be appended to the parent directory path at each level.
-        
-        session_dir = dir_root / session_id
-        series_dir = [session_dir / series_subdir_path for session_dir in session_dirs for series_dir in session_dir.iterdir() if series_dir.is_dir()]
+        The directory structure is assumed to be:
+        dir_root -|
+            session_id_1 -|
+                series_id_1 -| (DICOM or Nifti files)
+                series_id_2 -| (DICOM or Nifti files)
+            session_id_2 -|
+                series_id_3 -| (DICOM or Nifti files)
         
         Args:
             dir_root: The root directory of the dataset.
@@ -318,5 +330,28 @@ class Dataset(BaseModel):
                     }
                     records.append(record)
         df = pd.DataFrame(records)
-        table_save_path = self.features_root / "features.csv"
-        df.to_csv(table_save_path, index=False)
+        df.to_csv(self.csv_export_path, index=False)
+    
+    def merge_features_tables(self, other_datasets: list[Self], save_path: str | Path) -> None:
+        """
+        Merge the features tables from multiple datasets into a single CSV file. This is useful for comparing features across different datasets or for combining datasets for larger analyses.
+        
+        Args:
+            other_datasets: A list of other Dataset instances to merge with this dataset.
+            save_path: The path to save the merged CSV file.
+        """
+        if any(not isinstance(ds, Dataset) for ds in other_datasets):
+            raise ValueError("All items in other_datasets must be instances of Dataset")
+        save_path = Path(save_path)
+        if not save_path.parent.exists():
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+        # Add column for dataset identifier to each dataset's features table
+        df = pd.read_csv(self.csv_export_path)
+        df["root_data"] = str(self.dir_root)
+        df["features_data"] = str(self.features_root)
+        for i, other_ds in enumerate(other_datasets):
+            other_df = pd.read_csv(other_ds.csv_export_path)
+            other_df["root_data"] = str(other_ds.dir_root)
+            other_df["features_data"] = str(other_ds.features_root)
+            df = pd.concat([df, other_df], ignore_index=True)
+        df.to_csv(save_path, index=False)

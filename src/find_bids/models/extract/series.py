@@ -25,6 +25,7 @@ The next step is to implement an inference pipeline that takes these extracted f
 """
 
 import os, re, json
+from datetime import datetime
 from pathlib import Path, Path
 from typing import Optional, Iterable, Iterator, Self, Any
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
@@ -94,7 +95,6 @@ def parse_dicom_datetime(datetime_str: Optional[str]) -> Optional[Any]:
     if datetime_str is None:
         return None
     try:
-        from datetime import datetime
         if isinstance(datetime_str, str):
             # Remove fractional seconds if present
             if "." in datetime_str:
