@@ -148,6 +148,12 @@ def multivalue_to_string(value: Optional[Any]) -> Optional[str]:
         return " ".join(str(v) for v in value)
     return str(value)
 
+def dsfloat_to_float(value: Optional[DSfloat]) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, DSfloat):
+        return float(value)
+
 def extract_dicom_tokens(text: Optional[str]) -> list[str]:
     if isinstance(text, MultiValue):
         text = multivalue_to_string(text)
@@ -351,7 +357,7 @@ class GeometryFeatures(BaseModel):
                 if hasattr(ds, "PixelSpacing") and hasattr(ds, "SliceThickness"):
                     ps = get_tag_value(ds, "PixelSpacing", [None, None])
                     st = get_tag_value(ds, "SliceThickness", None)
-                    if ps and len(ps) == 2 and st:
+                    if ps and isinstance(ps, (list, tuple)) and len(ps) == 2 and st:
                         try:
                             dx_candidate = float(ps[0])
                             dy_candidate = float(ps[1])
