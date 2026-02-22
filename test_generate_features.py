@@ -53,6 +53,7 @@ for dataset_name, paths in dataset_info.items():
     dataset.generate_bids_ids(replace_existing=True)
     dataset.to_json()
     dataset.generate_features()
+    dataset.export_all_features_to_table()
     datasets.append(dataset)
     
 # Merge features tables from all datasets into a single table

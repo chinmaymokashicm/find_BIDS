@@ -3,6 +3,19 @@ Inference pipeline for BIDS dataset structure inference.
 This module contains the core logic for inferring the BIDS structure of a dataset based on extracted features and metadata. 
 It defines the main classes and functions for performing inference, including loading features, applying inference rules, and generating the inferred BIDS structure.
 """
+from .schema import BIDSEntities, Datatype
+
+from .rules import (
+    LOCALIZER_KEYWORDS,
+    DERIVED_MAP_KEYWORDS,
+    SURGICAL_NAV_KEYWORDS,
+    DERIVED_TIMESTAMP_PATTERN,
+    DIFFUSION_KEYWORDS,
+    PERFUSION_KEYWORDS,
+    FUNC_KEYWORDS,
+    FMAP_KEYWORDS,
+    ANAT_KEYWORDS,
+)
 from ..extract.series import SeriesFeatures
 from ..extract.dataset import Dataset
 
@@ -12,94 +25,8 @@ from typing import Optional
 from pathlib import Path
 
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from rich.progress import track
-
-LOCALIZER_KEYWORDS = {
-    "localizer", "scout", "aahead", "aahscout", "loc", "survey", "fiducial"
-}
-
-DERIVED_MAP_KEYWORDS = {
-    # Diffusion derivatives
-    "fa", "adc", "trace", "avdc", "md", "fractional", "anisotropy", "apparent",
-    # Perfusion derivatives  
-    "cbf", "cbv", "mtt", "ttp", "tmax",
-    # Other processing
-    "subtraction", "sub", "moco", "mocoseries", "tractography",
-    "reformat", "rfmt", "coreg", "coregistered", "normalized", "norm", "registered",
-    "derived", "derivative", "proc", "processed", "analysis", "analysed", "result", "res",
-    "map", "maps", "parametric", "param", "stat", "stats", "statistic", "statisticmap",
-    "nav", "stealth", "surgicalnav", "dynasuite", "brainlab",  # Surgical navigation exports
-}
-
-SURGICAL_NAV_KEYWORDS = {
-    "dynasuite", "surgicalnav", "navigation", "stealth", "brainlab"
-}
-
-# Patterns in SeriesDescription that indicate timestamp-stamped derived maps
-DERIVED_TIMESTAMP_PATTERN = re.compile(
-    r"(fa|trace|avdc|cbf|cbv):.*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{2}\s+\d{4}",
-    re.IGNORECASE
-)
-
-DIFFUSION_KEYWORDS = {
-    "dti", "dwi", "diff", "diffusion",  # Added "dti"
-    # Removed derived map keywords (fa, adc, trace) - those are in DERIVED_MAP_KEYWORDS
-}
-
-PERFUSION_KEYWORDS = {
-    "asl", "pcasl", "pasl", "casl", "arterial", "spin", "labeling",
-    "perfusion", "pwi", "dsc", "dce", "dcemri", "dynamic", "susceptibility",
-    # Removed CBF/CBV - those are derived maps
-}
-
-FUNC_KEYWORDS = {
-    "bold", "fmri", "rest", "rsfmri", "resting", "task",
-    "motor", "nback", "stroop", "language", "gambling",
-    "sent", "cat", "lett", "tongue", "hands", "bhands",  # Task-specific
-}
-
-FMAP_KEYWORDS = {
-    "fieldmap", "b0map", "b0", "topup",
-    "sefm", "pepolar", "b1map", "tb1",
-}
-
-ANAT_KEYWORDS = {
-    "t1", "t1w", "mprage", "spgr", "bravo",
-    "t2", "t2w", "flair", "pd", "swi", 
-    "t2star", "t2*",  # Added T2*
-    "gre", "cube", "3d", "magic",  # Added MAGiC
-    "anat",  # Generic anatomical label
-}
-
-class BIDSEntities(BaseModel):
-    """
-    Represents the core BIDS entities that can be extracted from DICOM metadata. 
-    These entities are crucial for organizing and structuring neuroimaging data according to the BIDS standard. 
-    Each entity is optional, as not all DICOM files may contain the necessary metadata to populate these fields. 
-    The `datatype` field is required, as it indicates the type of data (e.g., anat, func, dwi) and is essential for correctly categorizing the series within a BIDS dataset.
-    """
-    subject: Optional[str] = None
-    session: Optional[str] = None
-    run: Optional[str] = None
-    datatype: str
-    suffix: Optional[str] = None
-    part: Optional[str] = None
-    echo: Optional[str] = None
-    inv: Optional[str] = None
-    ce: Optional[str] = None
-    dir: Optional[str] = None
-    mt: Optional[str] = None
-    acq: Optional[str] = None
-
-class Datatype(Enum):
-    ANAT = "anat"
-    FUNC = "func"
-    DWI = "dwi"
-    FMAP = "fmap"
-    PERF = "perf"
-    EXCLUDE = "exclude"
-    UNKNOWN = "unknown"
 
 def collect_tokens(series: SeriesFeatures) -> set[str]:
     """Union of all text tokens from SeriesDescription / ProtocolName / SequenceName."""
@@ -118,13 +45,8 @@ def collect_tokens(series: SeriesFeatures) -> set[str]:
 def get_num_timepoints(series: SeriesFeatures) -> int | None:
     return series.temporal.num_timepoints if series.temporal else None
 
-
 def is_epi(series: SeriesFeatures) -> bool:
-    return bool(
-        series.encoding
-        and series.encoding.is_epi
-        and series.encoding.is_epi.value is True
-    )
+    raise NotImplementedError("EPI detection not implemented yet")
 
 def should_exclude(series: SeriesFeatures, tokens: set[str]) -> bool:
     """
@@ -317,7 +239,7 @@ def score_anat(series: SeriesFeatures, tokens: set[str]) -> int:
 
     return score
 
-def infer_bids_datatype(series: "SeriesFeatures") -> str:
+def infer_bids_datatype(series: SeriesFeatures) -> str:
     """
     Infer BIDS datatype from SeriesFeatures.
     
