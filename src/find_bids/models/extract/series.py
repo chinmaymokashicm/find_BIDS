@@ -36,6 +36,8 @@ from rich.progress import track, Progress, TextColumn, BarColumn, TimeRemainingC
 import numpy as np
 from pydicom.multival import MultiValue
 from pydicom.valuerep import DSfloat
+# from tinydb import TinyDB, Query
+import sqlite3
 
 CAMEL_TO_SNAKE_CASE_PATTERN: re.Pattern = re.compile(r'(?<!^)(?=[A-Z])')
 SNAKE_TO_CAMEL_CASE_PATTERN: re.Pattern = re.compile(r'(_)([a-z])')
@@ -162,6 +164,21 @@ def extract_dicom_tokens(text: Optional[str]) -> list[str]:
     text = text.lower()
     text = re.sub(r"[_\-]", " ", text)
     return _TOKEN_PATTERN.findall(text)
+
+def initialize_db(db_path: Path) -> sqlite3.Connection:
+    if not db_path.exists():
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS series_features (
+                    series_uid TEXT PRIMARY KEY,
+                    subject_id TEXT,
+                    session_id TEXT,
+                    features_json TEXT
+                )
+            """)
+            conn.commit()
+    return sqlite3.connect(db_path)
 
 class SeriesNumericFeature(BaseModel):
     value: Optional[float] # Robust central tendency measure (e.g. median)
@@ -315,6 +332,11 @@ class GeometryFeatures(BaseModel):
             ],
         )
     
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["rows", "columns", "num_slices", "voxel_size", "matrix_size", "geometry_hash"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
+    
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
         datasets = list(datasets)
@@ -431,6 +453,11 @@ class TemporalFeatures(BaseModel):
                 ("Echo train length", self.echo_train_length),
             ],
         )
+    
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["repetition_time", "echo_time", "inversion_time", "flip_angle", "num_timepoints", "temporal_variation", "tr_bucket", "te_bucket", "is_3D", "is_isotropic", "echo_train_length"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
     
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset], geometry: Optional[GeometryFeatures] = None) -> Self:
@@ -591,6 +618,11 @@ class DiffusionFeatures(BaseModel):
             ],
         )
     
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["b_values", "num_b0", "num_diffusion_volumes", "num_diffusion_directions", "has_diffusion"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
+    
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
         datasets = list(datasets)
@@ -683,6 +715,11 @@ class PerfusionFeatures(BaseModel):
             ],
         )
     
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["perfusion_labeling_type", "bolus_arrival_time", "contrast_agent", "perfusion_series_type", "num_timepoints", "temporal_spacing"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
+    
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
         datasets = list(datasets)
@@ -762,6 +799,11 @@ class SequenceFeatures(BaseModel):
             ],
         )
     
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["scanning_sequence", "sequence_variant", "scan_options", "mr_acquisition_type"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
+    
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
         return cls(
@@ -806,6 +848,11 @@ class MultiEchoFeatures(BaseModel):
                 ("Echo numbers", self.echo_numbers),
             ],
         )
+    
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["num_echoes", "echo_times", "echo_numbers"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
     
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
@@ -912,6 +959,11 @@ class SpatialFeatures(BaseModel):
             "pixel_spacing": pixel_spacing_value,
             "image_orientation": self.image_orientation.value if self.image_orientation else None,
         }
+    
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["slice_thickness", "spacing_between_slices", "pixel_spacing", "image_orientation"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
     
 class EncodingFeatures(BaseModel):
     phase_encoding_direction: Optional[SeriesCategoricalFeature] = None
@@ -1025,6 +1077,11 @@ class EncodingFeatures(BaseModel):
             "multiband_factor": self.multiband_factor.value if self.multiband_factor else None,
         }
     
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["phase_encoding_direction", "phase_encoding_axis", "phase_encoding_polarity", "echo_spacing", "parallel_reduction_factor_in_plane", "parallel_reduction_factor_out_of_plane", "multiband_factor"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
+    
 class ContrastFeatures(BaseModel):
     contrast_agent: Optional[SeriesCategoricalFeature] = None
     injection_time: Optional[SeriesNumericFeature] = None
@@ -1064,6 +1121,11 @@ class ContrastFeatures(BaseModel):
             "injection_time": self.injection_time.value if self.injection_time else None,
             "signal_intensity_shift": self.signal_intensity_shift.value if self.signal_intensity_shift else None,
         }
+    
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["contrast_agent", "injection_time", "signal_intensity_shift"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
 
 class ImageTypeFeature(BaseModel):
     """Structured parsing of ImageType multi-value field"""
@@ -1242,6 +1304,11 @@ class ImageTypeFeature(BaseModel):
             "is_real": self.is_real.value if self.is_real else None,
             "is_imaginary": self.is_imaginary.value if self.is_imaginary else None,
         }
+    
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["is_original", "is_primary", "is_localizer", "is_mpr", "is_mip", "is_projection", "is_reformatted", "has_angio", "has_diffusion", "has_perfusion", "is_adc", "is_fa", "is_trace", "is_cbf", "is_cbv", "is_magnitude", "is_phase", "is_real", "is_imaginary"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
 
 class TextualMetadataFeatures(BaseModel):
     series_description: Optional[SeriesTextFeature] = None
@@ -1283,6 +1350,11 @@ class TextualMetadataFeatures(BaseModel):
             "protocol_name": self.protocol_name.text if self.protocol_name else None,
             "sequence_name": self.sequence_name.text if self.sequence_name else None,
         }
+    
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["series_description", "protocol_name", "sequence_name"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
 
 class AcquisitionFeatures(BaseModel):
     acquisition_time: Optional[SeriesNumericFeature] = None
@@ -1376,6 +1448,11 @@ class AcquisitionFeatures(BaseModel):
             "series_time": self.series_time.value if self.series_time else None,
             "acquisition_order": self.acquisition_order,
         }
+    
+    @staticmethod
+    def get_column_headers(prefix: str = "") -> list[str]:
+        headers = ["acquisition_time", "series_time", "acquisition_order"]
+        return [f"{prefix}_{h}" if prefix else h for h in headers]
 
 class SeriesFeatures(BaseModel):
     series_uid: str
@@ -1441,6 +1518,15 @@ class SeriesFeatures(BaseModel):
         add_block("Acquisition", self.acquisition)
         
         return "\n".join(lines)
+    
+    @staticmethod
+    def get_column_headers() -> list[str]:
+        return [
+            "subject_id",
+            "session_id",
+            "series_id",
+            "data"
+        ]
     
     @classmethod
     def from_dicom_series(cls, series_dir: Path) -> Self:
@@ -1635,3 +1721,24 @@ class SeriesFeatures(BaseModel):
         flat.update(self.acquisition.flatten() if self.acquisition else {})
         
         return flat
+    
+    # def to_tinydb(self, db: TinyDB) -> None:
+    #     """
+    #     Store the series features in a TinyDB database, using series_uid as the unique key for upsert operations.
+    #     """
+    #     db.upsert(
+    #         self.model_dump(),
+    #         Query().series_uid == self.series_uid
+    #     )
+    
+    def to_sqlite(self, conn: sqlite3.Connection, subject_id: str, session_id: Optional[str] = None) -> None:
+        """
+        Store the series features in a SQLite database, using a composite key of (subject_id, session_id, series_uid) for upsert operations.
+        """
+        # Insert or replace the series features as a JSON blob
+        insert_query = """
+INSERT INTO series_features (subject_id, session_id, series_id, data)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(subject_id, session_id, series_id) DO UPDATE SET data=excluded.data
+"""
+        conn.execute(insert_query, (subject_id, session_id, self.series_uid, json.dumps(self.model_dump())))

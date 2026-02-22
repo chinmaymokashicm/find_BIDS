@@ -21,6 +21,7 @@ import pydicom as dicom
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, track
 import numpy as np
 import pandas as pd
+from tinydb import TinyDB, Query
 
 class Series(BaseModel):
     series_id: str
