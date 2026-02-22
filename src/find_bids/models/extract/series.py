@@ -1276,7 +1276,7 @@ class TextualMetadataFeatures(BaseModel):
             protocol_name=protocol_name,
             sequence_name=sequence_name,
         )
-        
+    
     def flatten(self) -> dict[str, Optional[str]]:
         return {
             "series_description": self.series_description.text if self.series_description else None,
