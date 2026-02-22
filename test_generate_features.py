@@ -56,15 +56,15 @@ for dataset_name, paths in dataset_info.items():
         dataset = future.result()
     dataset.generate_bids_ids(replace_existing=True)
     dataset.to_json()
-    dataset.generate_features()
+    dataset.generate_features(conn)
     # dataset.export_all_features_to_table()
     # datasets.append(dataset)
-    for subject in track(dataset.subjects or [], description=f"Inserting features for {dataset_name} dataset into database..."):
-        for session in subject.sessions or []:
-            for series in session.series or []:
-                features_path: Path = features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
-                series_features = SeriesFeatures.from_json(features_path)
-                series_features.to_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id)
+    # for subject in track(dataset.subjects or [], description=f"Inserting features for {dataset_name} dataset into database..."):
+    #     for session in subject.sessions or []:
+    #         for series in session.series or []:
+    #             features_path: Path = features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
+    #             series_features = SeriesFeatures.from_json(features_path)
+    #             series_features.to_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id)
     
 # Merge features tables from all datasets into a single table
 merged_table_save_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/all_features.csv")
