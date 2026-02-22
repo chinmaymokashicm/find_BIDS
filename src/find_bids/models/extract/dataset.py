@@ -346,11 +346,11 @@ class Dataset(BaseModel):
         if not save_path.parent.exists():
             save_path.parent.mkdir(parents=True, exist_ok=True)
         # Add column for dataset identifier to each dataset's features table
-        df = pd.read_csv(self.csv_export_path)
+        df = pd.read_csv(self.csv_export_path, low_memory=False)
         df["root_data"] = str(self.dir_root)
         df["features_data"] = str(self.features_root)
-        for i, other_ds in enumerate(other_datasets):
-            other_df = pd.read_csv(other_ds.csv_export_path)
+        for other_ds in other_datasets:
+            other_df = pd.read_csv(other_ds.csv_export_path, low_memory=False)
             other_df["root_data"] = str(other_ds.dir_root)
             other_df["features_data"] = str(other_ds.features_root)
             df = pd.concat([df, other_df], ignore_index=True)
