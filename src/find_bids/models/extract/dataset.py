@@ -15,13 +15,13 @@ import os, re, json
 from pathlib import Path, Path
 from typing import Optional, Iterable, Iterator, Self, Any, Literal
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+import sqlite3
 
 from pydantic import BaseModel, field_validator, ConfigDict
 import pydicom as dicom
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, track
 import numpy as np
 import pandas as pd
-from tinydb import TinyDB, Query
 
 class Series(BaseModel):
     series_id: str
@@ -255,16 +255,16 @@ class Dataset(BaseModel):
                 session.bids_session_id = f"{session_counter:04d}"
                 session_counter += 1
     
-    def generate_features(self) -> None:
+    def generate_features(self, conn: Optional[sqlite3.Connection] = None) -> None:
         """
         Generate features for all series in the dataset and save them to the features_root directory, maintaining the same hierarchy of subject/session/series.
         """
         if self.dtype == "DICOM":
-            self._generate_dicom_features()
+            self._generate_dicom_features(conn)
         elif self.dtype == "Nifti":
             self._generate_nifti_features()
             
-    def _generate_dicom_features(self) -> None:
+    def _generate_dicom_features(self, conn: Optional[sqlite3.Connection] = None) -> None:
         """
         Generate features for DICOM series by reading the DICOM files in each series directory and extracting relevant metadata and image statistics. Save the features to the features_root directory.
         """
@@ -280,7 +280,9 @@ class Dataset(BaseModel):
                     features_save_path.parent.mkdir(parents=True, exist_ok=True)
                     with open(features_save_path, "w") as f:
                         json.dump(features.model_dump(), f, indent=4)
-                    
+                    if conn is not None:
+                        features.to_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id)
+                        
     def _generate_nifti_features(self) -> None:
         """
         Generate features for Nifti series by reading the Nifti files in each series directory and extracting relevant metadata and image statistics. Save the features to the features_root directory.
