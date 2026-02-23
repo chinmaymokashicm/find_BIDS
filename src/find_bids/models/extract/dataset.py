@@ -81,6 +81,12 @@ class Dataset(BaseModel):
         return len(nifti_files) > 0
     
     @classmethod
+    def from_json(cls, json_path: str | Path) -> Self:
+        with open(json_path, "r") as f:
+            data = json.load(f)
+        return cls.model_validate(data)
+    
+    @classmethod
     def from_dir_with_subject_level(
         cls,
         dir_root: str | Path,
