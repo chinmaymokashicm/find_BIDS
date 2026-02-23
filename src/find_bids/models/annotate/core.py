@@ -82,14 +82,14 @@ class SeriesAnnotation(BaseModel):
     @model_validator(mode="before")
     def validate_suffix(cls, values: Any) -> Any:
         """Validate that if a suffix is provided, it is compatible with the annotated datatype."""
-        datatype_annotation: Datatype = values.get('datatype')
+        datatype_annotation: DatatypeAnnotation = values.get('datatype')
         if not isinstance(datatype_annotation, DatatypeAnnotation):
             raise ValueError("Datatype annotation must be provided and must be of type DatatypeAnnotation.")
         suffix_annotation: SuffixAnnotation = values.get('suffix')
         if suffix_annotation is not None and not isinstance(suffix_annotation, SuffixAnnotation):
             raise ValueError("Suffix annotation must be of type SuffixAnnotation if provided.")
         
-        if datatype_annotation.value in {Datatype.EXCLUDE, Datatype.UNKNOWN}:
+        if datatype_annotation.datatype in {Datatype.EXCLUDE, Datatype.UNKNOWN}:
             return values
         
         if suffix_annotation is not None and datatype_annotation is not None:

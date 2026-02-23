@@ -255,24 +255,32 @@ class Dataset(BaseModel):
                 session.bids_session_id = f"{session_counter:04d}"
                 session_counter += 1
     
-    def generate_features(self, conn: Optional[sqlite3.Connection] = None) -> None:
+    def generate_features(self, conn: Optional[sqlite3.Connection] = None) -> dict[str, dict[str, dict[str, SeriesFeatures]]]:
         """
         Generate features for all series in the dataset and save them to the features_root directory, maintaining the same hierarchy of subject/session/series.
         """
         if self.dtype == "DICOM":
-            self._generate_dicom_features(conn)
+            return self._generate_dicom_features(conn)
         elif self.dtype == "Nifti":
-            self._generate_nifti_features()
+            return self._generate_nifti_features()
+        return {}
             
-    def _generate_dicom_features(self, conn: Optional[sqlite3.Connection] = None) -> None:
+    def _generate_dicom_features(self, conn: Optional[sqlite3.Connection] = None) -> dict[str, dict[str, dict[str, SeriesFeatures]]]:
         """
         Generate features for DICOM series by reading the DICOM files in each series directory and extracting relevant metadata and image statistics. Save the features to the features_root directory.
         """
         if self.subjects is None:
-            return
+            return {}
+        all_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = {}
         for subject in track(self.subjects):
+            if subject.subject_id not in all_features:
+                all_features[subject.subject_id] = {}
             for session in subject.sessions or []:
+                if session.session_id not in all_features[subject.subject_id]:
+                    all_features[subject.subject_id][session.session_id] = {}
                 for series in session.series or []:
+                    if series.series_id in all_features[subject.subject_id][session.session_id]:
+                        continue
                     features_save_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
                     if not features_save_path.exists():
                         features = SeriesFeatures.from_dicom_series(series.path)
@@ -281,15 +289,20 @@ class Dataset(BaseModel):
                             json.dump(features.model_dump(), f, indent=4)
                     else:
                         features = SeriesFeatures.from_json(features_save_path)
+                    all_features[subject.subject_id][session.session_id][series.series_id] = features
                     if conn is not None:
                         features.to_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id)
                         
-    def _generate_nifti_features(self) -> None:
+        return all_features
+                        
+    def _generate_nifti_features(self) -> dict[str, dict[str, dict[str, SeriesFeatures]]]:
         """
         Generate features for Nifti series by reading the Nifti files in each series directory and extracting relevant metadata and image statistics. Save the features to the features_root directory.
         """
-        if self.subjects is None:
-            return
+        raise NotImplementedError("Nifti feature extraction is not yet implemented.")
+        # if self.subjects is None:
+        #     return {}
+        # all_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = {}
         # for subject in self.subjects or []:
         #     for session in subject.sessions or []:
         #         for series in session.series or []:

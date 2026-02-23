@@ -60,18 +60,20 @@ for dataset_name, paths in dataset_info.items():
         dataset = future.result()
     dataset.generate_bids_ids(replace_existing=True)
     dataset.to_json()
-    dataset.generate_features(features_conn)
+    dataset_features = dataset.generate_features(features_conn)
+    # Merge the generated features into the all_series_features dict
+    all_series_features = {**all_series_features, **dataset_features}
     
-    for subject in dataset.subjects or []:
-        for session in subject.sessions or []:
-            for series in session.series or []:
-                series_features_path = features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
-                series_features = SeriesFeatures.from_json(series_features_path)
-                if subject.subject_id not in all_series_features:
-                    all_series_features[subject.subject_id] = {}
-                if session.session_id not in all_series_features[subject.subject_id]:
-                    all_series_features[subject.subject_id][session.session_id] = {}
-                all_series_features[subject.subject_id][session.session_id][series.series_id] = series_features
+    # for subject in dataset.subjects or []:
+    #     for session in subject.sessions or []:
+    #         for series in session.series or []:
+    #             series_features_path = features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
+    #             series_features = SeriesFeatures.from_json(series_features_path)
+    #             if subject.subject_id not in all_series_features:
+    #                 all_series_features[subject.subject_id] = {}
+    #             if session.session_id not in all_series_features[subject.subject_id]:
+    #                 all_series_features[subject.subject_id][session.session_id] = {}
+    #             all_series_features[subject.subject_id][session.session_id][series.series_id] = series_features
     
     # dataset.export_all_features_to_table()
     # datasets.append(dataset)
