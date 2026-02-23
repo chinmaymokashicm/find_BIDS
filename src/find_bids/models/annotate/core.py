@@ -16,10 +16,30 @@ from ..infer.schema import BIDS_SCHEMA, Datatype
 from ..infer.core import infer_bids_datatype
 
 from typing import Optional, Any, Self
+import sqlite3
 
 from pydantic import BaseModel, Field, model_validator
 import pandas as pd
 import numpy as np
+
+def initialize_annotations_metrics_db(db_path: Path) -> sqlite3.Connection:
+    """Initialize the SQLite database for storing key metrics, for efficient querying when sampling for annotations."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS series_annotations (
+            subject_id TEXT NOT NULL,
+            session_id TEXT,
+            inferred_datatype TEXT,
+            protocol_score REAL,
+            inferred_datatype_entropy REAL,
+            class_balance_score REAL,
+            is_annotated INTEGER DEFAULT 0,
+            PRIMARY KEY (subject_id, session_id)
+        )
+    """)
+    conn.commit()
+    return conn
 
 class aboutAnnotator(BaseModel):
     name: str = Field(..., description="Name of the annotator.")
@@ -150,9 +170,10 @@ class SessionAnnotation(BaseModel):
         signature = "|".join(sorted(unique_fingerprints))
         return signature
     
-    def mark_annotated(self) -> Self:
-        """Return a new SessionAnnotation marked as annotated."""
-        return self.model_copy(update={"is_annotated": True})
+    def annotate(self, series_annotations: list[SeriesAnnotation], notes: Optional[str] = None) -> Self:
+        """Return a new SessionAnnotation with updated series annotations and marked as annotated."""
+        combined_notes = f"{self.notes}\n{notes}" if self.notes and notes else notes if notes else self.notes
+        return self.model_copy(update={"series_annotations": series_annotations, "notes": combined_notes, "is_annotated": True})
     
 class AllSessionsAnnotation(BaseModel):
     sessions: list[SessionAnnotation] = Field(..., description="List of session annotations for the dataset.")
@@ -198,6 +219,21 @@ class AllSessionsAnnotation(BaseModel):
         """Create an AllSessionsAnnotation instance from a list of SessionAnnotation instances."""
         return cls(sessions=sessions, notes=notes, annotator=annotator)
     
+    @classmethod
+    def from_series_features(cls, series_features_dict: dict[str, dict[str, dict[str, SeriesFeatures]]], notes: Optional[str] = None, annotator: Optional[aboutAnnotator] = None) -> Self:
+        """Create an AllSessionsAnnotation instance by grouping SeriesFeatures into sessions and initializing SessionAnnotations."""
+        sessions = []
+        for subject_id, sessions_dict in series_features_dict.items():
+            for session_id, series_dict in sessions_dict.items():
+                series_annotations = []
+                for _, features in series_dict.items():
+                    datatype_annotation = DatatypeAnnotation(datatype=Datatype.UNKNOWN, confidence=None, notes="Inferred from features")
+                    series_annotation = SeriesAnnotation(features=features, datatype=datatype_annotation, inferred_datatype=None, suffix=None, notes=None)
+                    series_annotations.append(series_annotation)
+                session_annotation = SessionAnnotation(subject=subject_id, session=session_id, series_annotations=series_annotations, notes=None, is_annotated=False)
+                sessions.append(session_annotation)
+        return cls(sessions=sessions, notes=notes, annotator=annotator)
+    
     def get_protocol_score(self, session: SessionAnnotation) -> float:
         """Inverse frequency score for the session's protocol signature based on the global protocol distribution."""
         distribution = self.global_protocol_distribution
@@ -225,29 +261,29 @@ class AllSessionsAnnotation(BaseModel):
         score = sum(weights.get(datatype, 0) * (counts[datatype] / len(inferred_datatypes)) for datatype in counts)
         return score
     
-    def get_next_session(
-        self,
-        w_entropy: float = 0.5,
-        w_protocol: float = 0.3,
-        w_class_balance: float = 0.2,
-        w_random: float = 0.0
-    ) -> Optional[SessionAnnotation]:
-        """Select the next session to annotate based on a combined score of inferred datatype entropy, protocol rarity, and class balance."""
-        if not self.unannotated:
-            return None
+    # def get_next_session(
+    #     self,
+    #     w_entropy: float = 0.5,
+    #     w_protocol: float = 0.3,
+    #     w_class_balance: float = 0.2,
+    #     w_random: float = 0.0
+    # ) -> Optional[SessionAnnotation]:
+    #     """Select the next session to annotate based on a combined score of inferred datatype entropy, protocol rarity, and class balance."""
+    #     if not self.unannotated:
+    #         return None
         
-        session_scores = []
-        for session in self.unannotated:
-            entropy_score = session.inferred_datatype_entropy or 0
-            protocol_score = self.get_protocol_score(session)
-            class_balance_score = self.get_class_balance_score(session)
-            random_score = random.random() if w_random > 0 else 0
+    #     session_scores = []
+    #     for session in self.unannotated:
+    #         entropy_score = session.inferred_datatype_entropy or 0
+    #         protocol_score = self.get_protocol_score(session)
+    #         class_balance_score = self.get_class_balance_score(session)
+    #         random_score = random.random() if w_random > 0 else 0
             
-            combined_score = (w_entropy * entropy_score) + (w_protocol * protocol_score) + (w_class_balance * class_balance_score) + (w_random * random_score)
-            session_scores.append((session, combined_score))
+    #         combined_score = (w_entropy * entropy_score) + (w_protocol * protocol_score) + (w_class_balance * class_balance_score) + (w_random * random_score)
+    #         session_scores.append((session, combined_score))
         
-        session_scores.sort(key=lambda x: x[1], reverse=True)
-        return session_scores[0][0] if session_scores else None
+    #     session_scores.sort(key=lambda x: x[1], reverse=True)
+    #     return session_scores[0][0] if session_scores else None
     
     def annotate_session(self, subject: str, session: Optional[str], new_session_annotation: SessionAnnotation) -> Self:
         """Return a new AllSessionsAnnotation with an updated annotation for a specific session."""
@@ -290,3 +326,53 @@ class AllSessionsAnnotation(BaseModel):
                 rows.append(row)
         df = pd.DataFrame(rows)
         df.to_csv(file_path, index=False)
+        
+    def export_annotation_metrics_to_sqlite(self, conn: sqlite3.Connection) -> None:
+        """Export key metrics for each session to a SQLite database for efficient querying when sampling for annotations."""
+        cursor = conn.cursor()
+        for session in self.sessions:
+            protocol_score = self.get_protocol_score(session)
+            class_balance_score = self.get_class_balance_score(session)
+            inferred_datatype_entropy = session.inferred_datatype_entropy
+            cursor.execute("""
+                INSERT INTO series_annotations (subject_id, session_id, inferred_datatype, protocol_score, inferred_datatype_entropy, class_balance_score, is_annotated)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(subject_id, session_id) DO UPDATE SET
+                    inferred_datatype=excluded.inferred_datatype,
+                    protocol_score=excluded.protocol_score,
+                    inferred_datatype_entropy=excluded.inferred_datatype_entropy,
+                    class_balance_score=excluded.class_balance_score,
+                    is_annotated=excluded.is_annotated
+            """, (
+                session.subject,
+                session.session,
+                session.series_annotations[0].inferred_datatype.value if session.series_annotations and session.series_annotations[0].inferred_datatype else None,
+                protocol_score,
+                inferred_datatype_entropy,
+                class_balance_score,
+                1 if session.is_annotated else 0
+            ))
+        conn.commit()
+        
+def get_next_session_for_annotation(
+    conn: sqlite3.Connection,
+    w_entropy: float = 0.5,
+    w_protocol: float = 0.3,
+    w_class_balance: float = 0.2,
+    w_random: float = 0.0
+) -> tuple[Optional[str], Optional[str]]:
+    """Select the next unannotated session to annotate based on a combined score of inferred datatype entropy, protocol rarity, and class balance."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT subject_id, session_id, protocol_score, inferred_datatype_entropy, class_balance_score
+        FROM series_annotations
+        WHERE (protocol_score IS NOT NULL AND inferred_datatype_entropy IS NOT NULL AND class_balance_score IS NOT NULL AND is_annotated = 0)
+        ORDER BY ((? * inferred_datatype_entropy) + (? * protocol_score) + (? * class_balance_score) + (? * RANDOM())) DESC
+        LIMIT 1
+    """, (w_entropy, w_protocol, w_class_balance, w_random))
+    
+    result = cursor.fetchone()
+    if result:
+        subject_id, session_id, _, _, _ = result
+        return (subject_id, session_id)
+    return (None, None)

@@ -165,7 +165,7 @@ def extract_dicom_tokens(text: Optional[str]) -> list[str]:
     text = re.sub(r"[_\-]", " ", text)
     return _TOKEN_PATTERN.findall(text)
 
-def initialize_db(db_path: Path) -> sqlite3.Connection:
+def initialize_features_db(db_path: Path) -> sqlite3.Connection:
     if not db_path.exists():
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()

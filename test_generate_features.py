@@ -1,5 +1,6 @@
-from src.find_bids.models.extract.series import initialize_db, SeriesFeatures
+from src.find_bids.models.extract.series import initialize_features_db, SeriesFeatures
 from src.find_bids.models.extract.dataset import Dataset
+from src.find_bids.models.annotate.core import initialize_annotations_metrics_db, AllSessionsAnnotation
 
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
@@ -25,9 +26,12 @@ dataset_info: dict[str, dict] = {
     # Add more datasets as needed
 }
 db_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
-conn = initialize_db(db_path)
+features_conn = initialize_features_db(db_path)
+annotations_db_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/annotations_metrics.db")
+annotations_conn = initialize_annotations_metrics_db(annotations_db_path)
 
-datasets = []
+# datasets = []
+all_series_features = {}
 for dataset_name, paths in dataset_info.items():
     with ThreadPoolExecutor() as executor:
         dir_root: Path = paths["dicom_root"]
@@ -56,7 +60,19 @@ for dataset_name, paths in dataset_info.items():
         dataset = future.result()
     dataset.generate_bids_ids(replace_existing=True)
     dataset.to_json()
-    dataset.generate_features(conn)
+    dataset.generate_features(features_conn)
+    
+    for subject in dataset.subjects or []:
+        for session in subject.sessions or []:
+            for series in session.series or []:
+                series_features_path = features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
+                series_features = SeriesFeatures.from_json(series_features_path)
+                if subject.subject_id not in all_series_features:
+                    all_series_features[subject.subject_id] = {}
+                if session.session_id not in all_series_features[subject.subject_id]:
+                    all_series_features[subject.subject_id][session.session_id] = {}
+                all_series_features[subject.subject_id][session.session_id][series.series_id] = series_features
+    
     # dataset.export_all_features_to_table()
     # datasets.append(dataset)
     
@@ -64,4 +80,8 @@ for dataset_name, paths in dataset_info.items():
 # merged_table_save_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/all_features.csv")
 # datasets[0].merge_features_tables(datasets[1:], save_path=merged_table_save_path)
 
-conn.close()
+features_conn.close()
+
+all_session_annotations = AllSessionsAnnotation.from_series_features(all_series_features)
+all_session_annotations.export_annotation_metrics_to_sqlite(annotations_conn)
+annotations_conn.close()
