@@ -102,8 +102,8 @@ class SeriesAnnotation(BaseModel):
     @model_validator(mode="after")
     def infer_datatype(cls, values: Any) -> Any:
         """Automatically infer the datatype based on features if not already annotated."""
-        if values.get('datatype') is not None and values['datatype'].datatype is not None:
-            return values
+        # if values.get('datatype') is not None and values['datatype'].datatype is not None:
+        #     return values
         
         features: SeriesFeatures = values.get('features')
         if features is None:
