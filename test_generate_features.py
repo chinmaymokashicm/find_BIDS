@@ -67,5 +67,5 @@ for dataset_name, paths in dataset_info.items():
     #             series_features.to_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id)
     
 # Merge features tables from all datasets into a single table
-merged_table_save_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/all_features.csv")
-datasets[0].merge_features_tables(datasets[1:], save_path=merged_table_save_path)
+# merged_table_save_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/all_features.csv")
+# datasets[0].merge_features_tables(datasets[1:], save_path=merged_table_save_path)
