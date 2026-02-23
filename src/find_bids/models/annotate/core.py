@@ -33,6 +33,7 @@ def initialize_annotations_metrics_db(db_path: Path) -> sqlite3.Connection:
             inferred_datatype TEXT,
             protocol_score REAL,
             inferred_datatype_counts JSON,
+            inferred_datatype_entropy REAL,
             class_balance_score REAL,
             is_annotated INTEGER DEFAULT 0,
             PRIMARY KEY (subject_id, session_id)
