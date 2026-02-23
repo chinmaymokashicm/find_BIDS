@@ -1531,6 +1531,40 @@ class SeriesFeatures(BaseModel):
         ]
     
     @classmethod
+    def from_sqlite(cls, conn: sqlite3.Connection, subject_id: str, session_id: str, series_id: str) -> Self:
+        """
+        Load series features from the database for a specific subject/session/series combination.
+        Returns a SeriesFeatures instance or raises ValueError if not found.
+        """
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT data FROM series_features WHERE subject_id = ? AND session_id = ? AND series_id = ?",
+            (subject_id, session_id, series_id)
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise ValueError(f"No features found for subject {subject_id}, session {session_id}, series {series_id}")
+        data_json = row[0]
+        data = json.loads(data_json)
+        
+        return cls.model_validate(data)
+    
+    @classmethod
+    def from_sqlite_all(cls, conn: sqlite3.Connection) -> list[tuple[str, str, str, Self]]:
+        """
+        Load all series features from the database, returning a list of (subject_id, session_id, series_id, SeriesFeatures) tuples.
+        """
+        cursor = conn.cursor()
+        cursor.execute("SELECT subject_id, session_id, series_id, data FROM series_features")
+        rows = cursor.fetchall()
+        results = []
+        for subject_id, session_id, series_id, data_json in rows:
+            data = json.loads(data_json)
+            features = cls.model_validate(data)
+            results.append((subject_id, session_id, series_id, features))
+        return results
+    
+    @classmethod
     def from_dicom_series(cls, series_dir: Path) -> Self:
         dicom_files = sorted(series_dir.glob("*.dcm"))
         if not dicom_files:
@@ -1723,15 +1757,6 @@ class SeriesFeatures(BaseModel):
         flat.update(self.acquisition.flatten() if self.acquisition else {})
         
         return flat
-    
-    # def to_tinydb(self, db: TinyDB) -> None:
-    #     """
-    #     Store the series features in a TinyDB database, using series_uid as the unique key for upsert operations.
-    #     """
-    #     db.upsert(
-    #         self.model_dump(),
-    #         Query().series_uid == self.series_uid
-    #     )
     
     def to_sqlite(self, conn: sqlite3.Connection, subject_id: str, session_id: Optional[str] = None) -> None:
         """
