@@ -100,19 +100,11 @@ class SeriesAnnotation(BaseModel):
         return values
     
     @model_validator(mode="after")
-    def infer_datatype(cls, values: Any) -> Any:
-        """Automatically infer the datatype based on features if not already annotated."""
-        # if values.get('datatype') is not None and values['datatype'].datatype is not None:
-        #     return values
+    def infer_datatype(self) -> Self:
+        """Infer the BIDS datatype based on the series features."""
+        self.inferred_datatype = Datatype(infer_bids_datatype(self.features)) if self.features else None
+        return self
         
-        features: SeriesFeatures = values.get('features')
-        if features is None:
-            raise ValueError("Features must be provided to infer datatype.")
-        
-        inferred_datatype = infer_bids_datatype(features)
-        values['inferred_datatype'] = inferred_datatype
-        
-        return values
     
     @property
     def protocol_fingerprint(self) -> str:
