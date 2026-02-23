@@ -174,8 +174,9 @@ def initialize_db(db_path: Path) -> sqlite3.Connection:
                     subject_id TEXT NOT NULL,
                     session_id TEXT,
                     series_id TEXT NOT NULL,
+                    series_description TEXT,
                     data JSON NOT NULL,
-                    PRIMARY KEY (subject_id, session_id, series_id)
+                    PRIMARY KEY (subject_id, session_id, series_id, series_description)
                 )
             """)
             conn.commit()
@@ -1734,12 +1735,13 @@ class SeriesFeatures(BaseModel):
     
     def to_sqlite(self, conn: sqlite3.Connection, subject_id: str, session_id: Optional[str] = None) -> None:
         """
-        Store the series features in a SQLite database, using a composite key of (subject_id, session_id, series_uid) for upsert operations.
+        Store the series features in a SQLite database, using a composite key of (subject_id, session_id, series_uid, series_description) for upsert operations.
         """
         # Insert or replace the series features as a JSON blob
         insert_query = """
-INSERT INTO series_features (subject_id, session_id, series_id, data)
-VALUES (?, ?, ?, ?)
-ON CONFLICT(subject_id, session_id, series_id) DO UPDATE SET data=excluded.data
+INSERT INTO series_features (subject_id, session_id, series_id, series_description, data)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(subject_id, session_id, series_id, series_description) DO UPDATE SET data=excluded.data
 """
-        conn.execute(insert_query, (subject_id, session_id, self.series_uid, json.dumps(self.model_dump())))
+        series_description = self.text.series_description.text if self.text and self.text.series_description else None
+        conn.execute(insert_query, (subject_id, session_id, self.series_uid, series_description, json.dumps(self.model_dump())))
