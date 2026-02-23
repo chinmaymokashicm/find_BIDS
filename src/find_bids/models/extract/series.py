@@ -1745,3 +1745,4 @@ ON CONFLICT(subject_id, session_id, series_id, series_description) DO UPDATE SET
 """
         series_description = self.text.series_description.text if self.text and self.text.series_description else None
         conn.execute(insert_query, (subject_id, session_id, self.series_uid, series_description, json.dumps(self.model_dump())))
+        conn.commit()
