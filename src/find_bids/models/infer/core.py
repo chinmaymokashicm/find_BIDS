@@ -47,82 +47,77 @@ def get_num_timepoints(series: SeriesFeatures) -> int | None:
 
 def is_epi(series: SeriesFeatures) -> bool:
     """
-    Heuristic detection of Echo Planar Imaging (EPI).
-    Uses multi-source evidence:
-        - Sequence metadata
-        - Echo train length
-        - Geometry
-        - Temporal profile
-        - Textual tokens
-        - Encoding parameters
+    Vendor-robust EPI detection using standard DICOM tags
+    and physics-informed heuristics.
     """
 
     score = 0
 
-    # --- 1. Sequence-level hints ---
     seq = series.sequence
-    if seq:
-        if seq.sequence_name and seq.sequence_name.value:
-            name = seq.sequence_name.value.lower()
-            if "epi" in name or "epfid" in name or "ep2d" in name:
-                score += 4
-
-        if seq.pulse_sequence_name and seq.pulse_sequence_name.value:
-            name = seq.pulse_sequence_name.value.lower()
-            if "epi" in name:
-                score += 4
-
-        if seq.scanning_sequence and seq.scanning_sequence.value:
-            val = str(seq.scanning_sequence.value).upper()
-            if "EP" in val:
-                score += 3
-
-    # --- 2. Echo train length ---
     temp = series.temporal
-    if temp and temp.echo_train_length and temp.echo_train_length.value:
-        if temp.echo_train_length.value > 10:
-            score += 3  # strong EPI indicator
+    enc = series.encoding
 
-    # --- 3. Temporal characteristics ---
+    # ---------------------------
+    # Strongest signal: ScanningSequence
+    # ---------------------------
+    if seq and seq.scanning_sequence and seq.scanning_sequence.value:
+        val = str(seq.scanning_sequence.value).upper()
+        if "EP" in val:          # DICOM standard for Echo Planar
+            score += 5
+
+    # ---------------------------
+    # ScanOptions may contain "EPI"
+    # ---------------------------
+    if seq and seq.scan_options and seq.scan_options.value:
+        val = str(seq.scan_options.value).upper()
+        if "EPI" in val:
+            score += 4
+
+    # ---------------------------
+    # Echo Train Length (EPI hallmark)
+    # ---------------------------
+    if temp and temp.echo_train_length and temp.echo_train_length.value:
+        if temp.echo_train_length.value >= 10:
+            score += 3
+
+    # ---------------------------
+    # Acquisition type (2D typical for EPI)
+    # ---------------------------
+    if seq and seq.mr_acquisition_type and seq.mr_acquisition_type.value:
+        if str(seq.mr_acquisition_type.value).upper() == "2D":
+            score += 1
+
+    # ---------------------------
+    # Temporal behavior
+    # ---------------------------
     n_tp = get_num_timepoints(series)
     if n_tp and n_tp > 10:
-        score += 2  # BOLD / DSC style time series
+        score += 2  # time-series EPI (BOLD, DSC)
 
-    if temp and temp.repetition_time and temp.repetition_time.value:
-        tr = temp.repetition_time.value
-        if 300 < tr < 4000:
+    # ---------------------------
+    # Phase encoding direction (common in EPI)
+    # ---------------------------
+    if enc and enc.phase_encoding_direction and enc.phase_encoding_direction.value:
+        score += 1
+
+    # ---------------------------
+    # Geometry sanity check
+    # ---------------------------
+    if series.spatial and series.spatial.slice_thickness and series.spatial.slice_thickness.value:
+        thickness = series.spatial.slice_thickness.value
+        if 1.0 <= thickness <= 5.0:  # EPI typically 2-4mm, but allow wider range
             score += 1
 
-    # --- 4. Geometry ---
-    geom = series.geometry
-    if geom:
-        if geom.is_2d and geom.is_2d.value:
-            score += 1
-        if geom.slice_thickness and geom.slice_thickness.value:
-            if geom.slice_thickness.value >= 2:
-                score += 1
+    # ---------------------------
+    # Guard against obvious non-EPI
+    # ---------------------------
+    if seq and seq.scanning_sequence and seq.scanning_sequence.value:
+        val = str(seq.scanning_sequence.value).upper()
+        if "SE" in val and "EP" not in val:
+            score -= 3  # classic spin echo
+        if "GR" in val and "EP" not in val:
+            score -= 2  # gradient echo non-EPI
 
-    # --- 5. Encoding features ---
-    enc = series.encoding
-    if enc:
-        if enc.phase_encoding_direction and enc.phase_encoding_direction.value:
-            score += 1
-        if enc.parallel_reduction_factor and enc.parallel_reduction_factor.value:
-            score += 1
-
-    # --- 6. Textual metadata ---
-    text = series.text
-    if text:
-        tokens = set(text.tokens) if text.tokens else set()
-        if tokens & {"epi", "bold", "asl", "dsc", "rest", "task"}:
-            score += 2
-
-    # --- 7. ImageType clues ---
-    imt = series.image_type
-    if imt and imt.has_epi and imt.has_epi.value:
-        score += 3
-
-    # --- Final decision ---
     return score >= 5
 
 def should_exclude(series: SeriesFeatures, tokens: set[str]) -> bool:
