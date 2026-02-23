@@ -46,7 +46,84 @@ def get_num_timepoints(series: SeriesFeatures) -> int | None:
     return series.temporal.num_timepoints if series.temporal else None
 
 def is_epi(series: SeriesFeatures) -> bool:
-    raise NotImplementedError("EPI detection not implemented yet")
+    """
+    Heuristic detection of Echo Planar Imaging (EPI).
+    Uses multi-source evidence:
+        - Sequence metadata
+        - Echo train length
+        - Geometry
+        - Temporal profile
+        - Textual tokens
+        - Encoding parameters
+    """
+
+    score = 0
+
+    # --- 1. Sequence-level hints ---
+    seq = series.sequence
+    if seq:
+        if seq.sequence_name and seq.sequence_name.value:
+            name = seq.sequence_name.value.lower()
+            if "epi" in name or "epfid" in name or "ep2d" in name:
+                score += 4
+
+        if seq.pulse_sequence_name and seq.pulse_sequence_name.value:
+            name = seq.pulse_sequence_name.value.lower()
+            if "epi" in name:
+                score += 4
+
+        if seq.scanning_sequence and seq.scanning_sequence.value:
+            val = str(seq.scanning_sequence.value).upper()
+            if "EP" in val:
+                score += 3
+
+    # --- 2. Echo train length ---
+    temp = series.temporal
+    if temp and temp.echo_train_length and temp.echo_train_length.value:
+        if temp.echo_train_length.value > 10:
+            score += 3  # strong EPI indicator
+
+    # --- 3. Temporal characteristics ---
+    n_tp = get_num_timepoints(series)
+    if n_tp and n_tp > 10:
+        score += 2  # BOLD / DSC style time series
+
+    if temp and temp.repetition_time and temp.repetition_time.value:
+        tr = temp.repetition_time.value
+        if 300 < tr < 4000:
+            score += 1
+
+    # --- 4. Geometry ---
+    geom = series.geometry
+    if geom:
+        if geom.is_2d and geom.is_2d.value:
+            score += 1
+        if geom.slice_thickness and geom.slice_thickness.value:
+            if geom.slice_thickness.value >= 2:
+                score += 1
+
+    # --- 5. Encoding features ---
+    enc = series.encoding
+    if enc:
+        if enc.phase_encoding_direction and enc.phase_encoding_direction.value:
+            score += 1
+        if enc.parallel_reduction_factor and enc.parallel_reduction_factor.value:
+            score += 1
+
+    # --- 6. Textual metadata ---
+    text = series.text
+    if text:
+        tokens = set(text.tokens) if text.tokens else set()
+        if tokens & {"epi", "bold", "asl", "dsc", "rest", "task"}:
+            score += 2
+
+    # --- 7. ImageType clues ---
+    imt = series.image_type
+    if imt and imt.has_epi and imt.has_epi.value:
+        score += 3
+
+    # --- Final decision ---
+    return score >= 5
 
 def should_exclude(series: SeriesFeatures, tokens: set[str]) -> bool:
     """
