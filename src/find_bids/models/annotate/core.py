@@ -9,7 +9,7 @@ The idea is to have a Dockerized annotation UI that can be used to annotate seri
 """
 from pathlib import Path
 from collections import Counter
-import random
+import random, json
 
 from ..extract.series import SeriesFeatures
 from ..infer.schema import BIDS_SCHEMA, Datatype
@@ -32,7 +32,7 @@ def initialize_annotations_metrics_db(db_path: Path) -> sqlite3.Connection:
             session_id TEXT,
             inferred_datatype TEXT,
             protocol_score REAL,
-            inferred_datatype_entropy REAL,
+            inferred_datatype_counts JSON,
             class_balance_score REAL,
             is_annotated INTEGER DEFAULT 0,
             PRIMARY KEY (subject_id, session_id)
@@ -325,12 +325,15 @@ class AllSessionsAnnotation(BaseModel):
         for session in self.sessions:
             protocol_score = self.get_protocol_score(session)
             class_balance_score = self.get_class_balance_score(session)
-            inferred_datatype_entropy = session.inferred_datatype_entropy
+            inferred_datatype_counts = {series.inferred_datatype.value: 0 for series in session.series_annotations if series.inferred_datatype is not None}
+            for series in session.series_annotations:
+                if series.inferred_datatype is not None:
+                    inferred_datatype_counts[series.inferred_datatype.value] += 1
             cursor.execute("""
-                INSERT INTO series_annotations (subject_id, session_id, inferred_datatype, protocol_score, inferred_datatype_entropy, class_balance_score, is_annotated)
+                INSERT INTO series_annotations (subject_id, session_id, inferred_datatype_counts, protocol_score, inferred_datatype_entropy, class_balance_score, is_annotated)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(subject_id, session_id) DO UPDATE SET
-                    inferred_datatype=excluded.inferred_datatype,
+                    inferred_datatype_counts=excluded.inferred_datatype_counts,
                     protocol_score=excluded.protocol_score,
                     inferred_datatype_entropy=excluded.inferred_datatype_entropy,
                     class_balance_score=excluded.class_balance_score,
@@ -338,9 +341,9 @@ class AllSessionsAnnotation(BaseModel):
             """, (
                 session.subject,
                 session.session,
-                session.series_annotations[0].inferred_datatype.value if session.series_annotations and session.series_annotations[0].inferred_datatype else None,
+                json.dumps(inferred_datatype_counts) if inferred_datatype_counts is not None else None,
                 protocol_score,
-                inferred_datatype_entropy,
+                session.inferred_datatype_entropy,
                 class_balance_score,
                 1 if session.is_annotated else 0
             ))
@@ -353,10 +356,14 @@ def get_next_session_for_annotation(
     w_class_balance: float = 0.2,
     w_random: float = 0.0
 ) -> tuple[Optional[str], Optional[str]]:
-    """Select the next unannotated session to annotate based on a combined score of inferred datatype entropy, protocol rarity, and class balance."""
+    """
+    Select the next unannotated session to annotate based on a combined score of inferred datatype entropy, protocol rarity, and class balance.
+    Formula:
+    combined_score = (w_entropy * inferred_datatype_entropy) + (w_protocol * protocol_score) + (w_class_balance * class_balance_score) + (w_random * random_score)
+    """
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT subject_id, session_id, protocol_score, inferred_datatype_entropy, class_balance_score
+        SELECT subject_id, session_id, inferred_datatype_counts, inferred_datatype_entropy, protocol_score, class_balance_score
         FROM series_annotations
         WHERE (protocol_score IS NOT NULL AND inferred_datatype_entropy IS NOT NULL AND class_balance_score IS NOT NULL AND is_annotated = 0)
         ORDER BY ((? * inferred_datatype_entropy) + (? * protocol_score) + (? * class_balance_score) + (? * RANDOM())) DESC
@@ -365,6 +372,6 @@ def get_next_session_for_annotation(
     
     result = cursor.fetchone()
     if result:
-        subject_id, session_id, _, _, _ = result
+        subject_id, session_id, _, _, _, _ = result
         return (subject_id, session_id)
     return (None, None)
