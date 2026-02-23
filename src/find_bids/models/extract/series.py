@@ -171,10 +171,11 @@ def initialize_db(db_path: Path) -> sqlite3.Connection:
             cursor = conn.cursor()
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS series_features (
-                    series_uid TEXT PRIMARY KEY,
-                    subject_id TEXT,
+                    subject_id TEXT NOT NULL,
                     session_id TEXT,
-                    features_json TEXT
+                    series_id TEXT NOT NULL,
+                    data JSON NOT NULL,
+                    PRIMARY KEY (subject_id, session_id, series_id)
                 )
             """)
             conn.commit()
