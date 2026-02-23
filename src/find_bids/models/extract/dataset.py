@@ -274,12 +274,13 @@ class Dataset(BaseModel):
             for session in subject.sessions or []:
                 for series in session.series or []:
                     features_save_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
-                    if features_save_path.exists():
-                        continue  # Skip if features already exist for this series
-                    features = SeriesFeatures.from_dicom_series(series.path)
-                    features_save_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(features_save_path, "w") as f:
-                        json.dump(features.model_dump(), f, indent=4)
+                    if not features_save_path.exists():
+                        features = SeriesFeatures.from_dicom_series(series.path)
+                        features_save_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(features_save_path, "w") as f:
+                            json.dump(features.model_dump(), f, indent=4)
+                    else:
+                        features = SeriesFeatures.from_json(features_save_path)
                     if conn is not None:
                         features.to_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id)
                         conn.commit()
