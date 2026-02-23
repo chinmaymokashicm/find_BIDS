@@ -69,3 +69,5 @@ for dataset_name, paths in dataset_info.items():
 # Merge features tables from all datasets into a single table
 # merged_table_save_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/all_features.csv")
 # datasets[0].merge_features_tables(datasets[1:], save_path=merged_table_save_path)
+
+conn.close()

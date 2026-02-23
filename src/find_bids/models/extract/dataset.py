@@ -283,7 +283,6 @@ class Dataset(BaseModel):
                         features = SeriesFeatures.from_json(features_save_path)
                     if conn is not None:
                         features.to_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id)
-                        conn.commit()
                         
     def _generate_nifti_features(self) -> None:
         """
