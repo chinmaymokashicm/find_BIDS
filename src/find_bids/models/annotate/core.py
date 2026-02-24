@@ -18,7 +18,7 @@ from ..infer.core import infer_bids_datatype
 from typing import Optional, Any, Self
 import sqlite3
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, EmailStr
 import pandas as pd
 import numpy as np
 
@@ -41,9 +41,9 @@ def initialize_annotations_metrics_db(db_path: Path) -> sqlite3.Connection:
     conn.commit()
     return conn
 
-class aboutAnnotator(BaseModel):
+class AboutAnnotator(BaseModel):
     name: str = Field(..., description="Name of the annotator.")
-    contact_info: Optional[str] = Field(None, description="Contact information for the annotator (e.g., email).")
+    email: EmailStr = Field(..., description="Email address of the annotator.")
     notes: Optional[str] = Field(None, description="Additional notes or comments about the annotator.")
 
 class DatatypeAnnotation(BaseModel):
@@ -170,7 +170,7 @@ class SessionAnnotation(BaseModel):
 class AllSessionsAnnotation(BaseModel):
     sessions: list[SessionAnnotation] = Field(..., description="List of session annotations for the dataset.")
     notes: Optional[str] = Field(None, description="Additional notes or comments about all annotations.")
-    annotator: Optional[aboutAnnotator] = Field(None, description="Information about the annotator.")
+    annotator: Optional[AboutAnnotator] = Field(None, description="Information about the annotator.")
     
     @property
     def is_fully_annotated(self) -> bool:
@@ -207,12 +207,12 @@ class AllSessionsAnnotation(BaseModel):
         return dict(counter)
     
     @classmethod
-    def from_sessions(cls, sessions: list[SessionAnnotation], notes: Optional[str] = None, annotator: Optional[aboutAnnotator] = None) -> Self:
+    def from_sessions(cls, sessions: list[SessionAnnotation], notes: Optional[str] = None, annotator: Optional[AboutAnnotator] = None) -> Self:
         """Create an AllSessionsAnnotation instance from a list of SessionAnnotation instances."""
         return cls(sessions=sessions, notes=notes, annotator=annotator)
     
     @classmethod
-    def from_series_features(cls, series_features_dict: dict[str, dict[str, dict[str, SeriesFeatures]]], notes: Optional[str] = None, annotator: Optional[aboutAnnotator] = None) -> Self:
+    def from_series_features(cls, series_features_dict: dict[str, dict[str, dict[str, SeriesFeatures]]], notes: Optional[str] = None, annotator: Optional[AboutAnnotator] = None) -> Self:
         """Create an AllSessionsAnnotation instance by grouping SeriesFeatures into sessions and initializing SessionAnnotations."""
         sessions = []
         for subject_id, sessions_dict in series_features_dict.items():
