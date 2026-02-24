@@ -1531,10 +1531,10 @@ class SeriesFeatures(BaseModel):
         ]
     
     @classmethod
-    def from_sqlite(cls, conn: sqlite3.Connection, subject_id: Optional[str] = None, session_id: Optional[str] = None, series_id: Optional[str] = None) -> Self:
+    def from_sqlite(cls, conn: sqlite3.Connection, subject_id: Optional[str] = None, session_id: Optional[str] = None, series_id: Optional[str] = None) -> list[Self]:
         """
         Load series features from the database for a specific subject/session/series combination.
-        Returns a SeriesFeatures instance or raises ValueError if not found.
+        Returns a list of SeriesFeatures instances or raises ValueError if not found.
         """
         cursor = conn.cursor()
         query = "SELECT data FROM series_features WHERE 1=1"
@@ -1549,13 +1549,15 @@ class SeriesFeatures(BaseModel):
             query += " AND series_id = ?"
             params.append(series_id)
         cursor.execute(query, params)
-        row = cursor.fetchone()
-        if not row:
+        rows = cursor.fetchall()
+        if not rows:
             raise ValueError(f"No features found for subject {subject_id}, session {session_id}, series {series_id}")
-        data_json = row[0]
-        data = json.loads(data_json)
-        
-        return cls.model_validate(data)
+        results = []
+        for row in rows:
+            data_json = row[0]
+            data = json.loads(data_json)
+            results.append(cls.model_validate(data))
+        return results
     
     @classmethod
     def from_sqlite_all(cls, conn: sqlite3.Connection) -> list[tuple[str, str, str, Self]]:
