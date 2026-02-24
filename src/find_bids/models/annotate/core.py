@@ -375,3 +375,13 @@ def get_next_session_for_annotation(
         subject_id, session_id, _, _, _, _ = result
         return (subject_id, session_id)
     return (None, None)
+
+def mark_session_as_annotated(conn: sqlite3.Connection, subject_id: str, session_id: Optional[str]) -> None:
+    """Mark a specific session as annotated in the database."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE series_annotations
+        SET is_annotated = 1
+        WHERE subject_id = ? AND session_id = ?
+    """, (subject_id, session_id))
+    conn.commit()

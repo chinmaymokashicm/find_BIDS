@@ -1531,16 +1531,24 @@ class SeriesFeatures(BaseModel):
         ]
     
     @classmethod
-    def from_sqlite(cls, conn: sqlite3.Connection, subject_id: str, session_id: str, series_id: str) -> Self:
+    def from_sqlite(cls, conn: sqlite3.Connection, subject_id: Optional[str] = None, session_id: Optional[str] = None, series_id: Optional[str] = None) -> Self:
         """
         Load series features from the database for a specific subject/session/series combination.
         Returns a SeriesFeatures instance or raises ValueError if not found.
         """
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT data FROM series_features WHERE subject_id = ? AND session_id = ? AND series_id = ?",
-            (subject_id, session_id, series_id)
-        )
+        query = "SELECT data FROM series_features WHERE 1=1"
+        params = []
+        if subject_id is not None:
+            query += " AND subject_id = ?"
+            params.append(subject_id)
+        if session_id is not None:
+            query += " AND session_id = ?"
+            params.append(session_id)
+        if series_id is not None:
+            query += " AND series_id = ?"
+            params.append(series_id)
+        cursor.execute(query, params)
         row = cursor.fetchone()
         if not row:
             raise ValueError(f"No features found for subject {subject_id}, session {session_id}, series {series_id}")
