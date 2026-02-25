@@ -27,7 +27,7 @@ def initialize_annotations_metrics_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS series_annotations (
+        CREATE TABLE IF NOT EXISTS session_annotations_metrics (
             subject_id TEXT NOT NULL,
             session_id TEXT,
             protocol_score REAL,
@@ -396,7 +396,7 @@ class AllSessionsAnnotation(BaseModel):
                 if series.inferred_datatype is not None:
                     inferred_datatype_counts[series.inferred_datatype.value] += 1
             cursor.execute("""
-                INSERT INTO series_annotations (subject_id, session_id, inferred_datatype_counts, protocol_score, inferred_datatype_entropy, class_balance_score, is_annotated)
+                INSERT INTO session_annotations_metrics (subject_id, session_id, inferred_datatype_counts, protocol_score, inferred_datatype_entropy, class_balance_score, is_annotated)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(subject_id, session_id) DO UPDATE SET
                     inferred_datatype_counts=excluded.inferred_datatype_counts,
@@ -430,7 +430,7 @@ def get_next_session_for_annotation(
     cursor = conn.cursor()
     cursor.execute("""
         SELECT subject_id, session_id, inferred_datatype_counts, inferred_datatype_entropy, protocol_score, class_balance_score
-        FROM series_annotations
+        FROM session_annotations_metrics
         WHERE (protocol_score IS NOT NULL AND inferred_datatype_entropy IS NOT NULL AND class_balance_score IS NOT NULL AND is_annotated = 0)
         ORDER BY ((? * inferred_datatype_entropy) + (? * protocol_score) + (? * class_balance_score) + (? * RANDOM())) DESC
         LIMIT 1
@@ -446,7 +446,7 @@ def mark_session_as_annotated(conn: sqlite3.Connection, subject_id: str, session
     """Mark a specific session as annotated in the database."""
     cursor = conn.cursor()
     cursor.execute("""
-        UPDATE series_annotations
+        UPDATE session_annotations_metrics
         SET is_annotated = 1
         WHERE subject_id = ? AND session_id = ?
     """, (subject_id, session_id))

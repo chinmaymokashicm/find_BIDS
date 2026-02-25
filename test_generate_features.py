@@ -27,8 +27,8 @@ dataset_info: dict[str, dict] = {
 }
 db_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
 features_conn = initialize_features_db(db_path)
-annotations_db_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/annotations_metrics.db")
-annotations_conn = initialize_annotations_metrics_db(annotations_db_path)
+# annotations_db_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/annotations_metrics.db")
+_ = initialize_annotations_metrics_db(db_path)
 
 # datasets = []
 all_series_features = {}
@@ -85,5 +85,5 @@ for dataset_name, paths in dataset_info.items():
 features_conn.close()
 
 all_session_annotations = AllSessionsAnnotation.from_series_features(all_series_features)
-all_session_annotations.export_annotation_metrics_to_sqlite(annotations_conn)
-annotations_conn.close()
+all_session_annotations.export_annotation_metrics_to_sqlite(features_conn)
+features_conn.close()
