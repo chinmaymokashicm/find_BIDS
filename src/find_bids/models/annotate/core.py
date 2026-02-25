@@ -104,7 +104,6 @@ class SeriesAnnotation(BaseModel):
         """Infer the BIDS datatype based on the series features."""
         self.inferred_datatype = Datatype(infer_bids_datatype(self.features)) if self.features else None
         return self
-        
     
     @property
     def protocol_fingerprint(self) -> str:

@@ -1560,18 +1560,20 @@ class SeriesFeatures(BaseModel):
         return results
     
     @classmethod
-    def from_sqlite_all(cls, conn: sqlite3.Connection) -> list[tuple[str, str, str, Self]]:
+    def from_sqlite_all(cls, conn: sqlite3.Connection) -> list[Self]:
         """
-        Load all series features from the database, returning a list of (subject_id, session_id, series_id, SeriesFeatures) tuples.
+        Load all series features from the database, returning a list of SeriesFeatures instances.
         """
         cursor = conn.cursor()
-        cursor.execute("SELECT subject_id, session_id, series_id, data FROM series_features")
+        cursor.execute("SELECT data FROM series_features")
         rows = cursor.fetchall()
+        print(f"Loaded {len(rows)} series feature entries from the database")
         results = []
-        for subject_id, session_id, series_id, data_json in rows:
+        for row in rows:
+            data_json = row[0]
             data = json.loads(data_json)
             features = cls.model_validate(data)
-            results.append((subject_id, session_id, series_id, features))
+            results.append(features)
         return results
     
     @classmethod
