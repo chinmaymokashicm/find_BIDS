@@ -166,6 +166,30 @@ class SessionAnnotation(BaseModel):
         combined_notes = f"{self.notes}\n{notes}" if self.notes and notes else notes if notes else self.notes
         return self.model_copy(update={"series_annotations": series_annotations, "notes": combined_notes, "is_annotated": True})
     
+    def save_to_csv(self, file_path: str | Path) -> None:
+        """Append annotated series annotations for the session to a CSV file."""
+        file_path = Path(file_path)
+        rows = []
+        for series_annotation in self.series_annotations:
+            row = {
+                "subject": self.subject,
+                "session": self.session,
+                "datatype": series_annotation.datatype.datatype.value,
+                "datatype_confidence": series_annotation.datatype.confidence,
+                "datatype_notes": series_annotation.datatype.notes,
+                "suffix": series_annotation.suffix.suffix if series_annotation.suffix else None,
+                "suffix_confidence": series_annotation.suffix.confidence if series_annotation.suffix else None,
+                "suffix_notes": series_annotation.suffix.notes if series_annotation.suffix else None,
+                "series_notes": series_annotation.notes,
+                "is_annotated": self.is_annotated
+            }
+            rows.append(row)
+        df = pd.DataFrame(rows)
+        if file_path.exists():
+            df.to_csv(file_path, mode='a', header=False, index=False)
+        else:
+            df.to_csv(file_path, index=False)
+    
 class AllSessionsAnnotation(BaseModel):
     sessions: list[SessionAnnotation] = Field(..., description="List of session annotations for the dataset.")
     notes: Optional[str] = Field(None, description="Additional notes or comments about all annotations.")
@@ -297,6 +321,8 @@ class AllSessionsAnnotation(BaseModel):
                 updated_sessions.append(existing_session)
         return self.model_copy(update={"sessions": updated_sessions})
     
+    # !Do not use this method in the annotation UI, as it will overwrite existing annotations without warning! 
+    # !This is intended for use in testing or if you want to reset all annotations and start over.
     def to_csv(self, file_path: str | Path) -> None:
         """Export annotated session annotations to a CSV file."""
         file_path = Path(file_path)
