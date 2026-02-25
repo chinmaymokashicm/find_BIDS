@@ -171,6 +171,7 @@ class SessionAnnotation(BaseModel):
         """Load series annotations for a session from a CSV file and create a SessionAnnotation instance."""
         file_path = Path(file_path)
         df = pd.read_csv(file_path)
+        df = df.replace({np.nan: None})  # Replace NaN with None for easier handling of missing values
         session_df = df[(df['subject'] == subject) & (df['session'] == session)]
         series_annotations = []
         for _, row in session_df.iterrows():
