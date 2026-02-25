@@ -161,6 +161,45 @@ class SessionAnnotation(BaseModel):
         signature = "|".join(sorted(unique_fingerprints))
         return signature
     
+    @classmethod
+    def from_session_features(cls, series_annotations: list[SeriesAnnotation], subject: str, session: Optional[str] = None, notes: Optional[str] = None) -> Self:
+        """Create a SessionAnnotation instance from a list of SeriesAnnotation instances."""
+        return cls(subject=subject, session=session, series_annotations=series_annotations, notes=notes, is_annotated=False)
+    
+    @classmethod
+    def from_csv(cls, file_path: str | Path, series_features: list[SeriesFeatures], subject: str, session: Optional[str] = None) -> Self:
+        """Load series annotations for a session from a CSV file and create a SessionAnnotation instance."""
+        file_path = Path(file_path)
+        df = pd.read_csv(file_path)
+        session_df = df[(df['subject'] == subject) & (df['session'] == session)]
+        series_annotations = []
+        for _, row in session_df.iterrows():
+            # Identify the series features that match the row's series description (this is a simplification and may need a more robust matching strategy in practice)
+            matching_features: Optional[SeriesFeatures] = next((features for features in series_features if features.text and features.text.series_description == row['series_description']), None)
+            if not matching_features:
+                print(f"Warning: No matching series features found for row with series description '{row['series_description']}' in subject '{subject}', session '{session}'. Skipping this annotation.")
+                continue
+            
+            datatype_annotation = DatatypeAnnotation(
+                datatype=Datatype(row['datatype']),
+                confidence=row.get('datatype_confidence'),
+                notes=row.get('datatype_notes')
+            )
+            suffix_annotation = SuffixAnnotation(
+                suffix=row['suffix'],
+                confidence=row.get('suffix_confidence'),
+                notes=row.get('suffix_notes')
+            ) if pd.notna(row.get('suffix')) else None
+            series_annotation = SeriesAnnotation(
+                features=matching_features,
+                inferred_datatype=None,
+                datatype=datatype_annotation,
+                suffix=suffix_annotation,
+                notes=row.get('series_notes')
+            )
+            series_annotations.append(series_annotation)
+        return cls(subject=subject, session=session, series_annotations=series_annotations, notes=None, is_annotated=True)
+    
     def annotate(self, series_annotations: list[SeriesAnnotation], notes: Optional[str] = None) -> Self:
         """Return a new SessionAnnotation with updated series annotations and marked as annotated."""
         combined_notes = f"{self.notes}\n{notes}" if self.notes and notes else notes if notes else self.notes
@@ -174,6 +213,7 @@ class SessionAnnotation(BaseModel):
             row = {
                 "subject": self.subject,
                 "session": self.session,
+                "series_description": series_annotation.features.text.series_description if series_annotation.features and series_annotation.features.text else None,
                 "datatype": series_annotation.datatype.datatype.value,
                 "datatype_confidence": series_annotation.datatype.confidence,
                 "datatype_notes": series_annotation.datatype.notes,
