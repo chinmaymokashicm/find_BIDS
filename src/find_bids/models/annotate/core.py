@@ -213,7 +213,7 @@ class SessionAnnotation(BaseModel):
             row = {
                 "subject": self.subject,
                 "session": self.session,
-                "series_description": series_annotation.features.text.series_description if series_annotation.features and series_annotation.features.text else None,
+                "series_description": series_annotation.features.text.series_description.text if series_annotation.features.text and series_annotation.features.text.series_description else None,
                 "datatype": series_annotation.datatype.datatype.value,
                 "datatype_confidence": series_annotation.datatype.confidence,
                 "datatype_notes": series_annotation.datatype.notes,

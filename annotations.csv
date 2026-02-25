@@ -1,0 +1,35 @@
+subject,session,series_description,datatype,datatype_confidence,datatype_notes,suffix,suffix_confidence,suffix_notes,series_notes,is_annotated
+2178-0220,2178-0220-3578-7607,"text='FE Curl Waves: Brain MRE :-Q' tokens={'fe': 384, 'curl': 384, 'waves': 384, 'brain': 384, 'mre': 384, 'q': 384} valid_fraction=1.0",dwi,5,sdsad,dwi,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Ax 2D MAGIC' tokens={'ax': 464, '2d': 464, 'magic': 464} valid_fraction=1.0",anat,5,,FLAIR,5,vghv,,False
+2178-0220,2178-0220-3578-7607,"text='Ax 3D ASL' tokens={'ax': 52, '3d': 52, 'asl': 52} valid_fraction=1.0",fmap,5,,epi,5,,,False
+2178-0220,2178-0220-3578-7607,"text='ORIG: Ax DTI' tokens={'orig': 308, 'ax': 308, 'dti': 308} valid_fraction=1.0",fmap,5,,epi,5,,,False
+2178-0220,2178-0220-3578-7607,"text='RFMT Cor 3D T1' tokens={'rfmt': 172, 'cor': 172, '3d': 172, 't1': 172} valid_fraction=1.0",fmap,5,,magnitude1,5,,,False
+2178-0220,2178-0220-3578-7607,"text='AvDC (10^-6 mm²/s): b1000' tokens={'avdc': 44, '10': 44, '6': 44, 'mm': 44, 's': 44, 'b1000': 44} valid_fraction=1.0",dwi,5,,dwi,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Confidence Map: Brain MRE :-Q' tokens={'confidence': 48, 'map': 48, 'brain': 48, 'mre': 48, 'q': 48} valid_fraction=1.0",fmap,5,,fieldmap,5,,,False
+2178-0220,2178-0220-3578-7607,"text='3Pl loc_ IRB 2019-1070' tokens={'3pl': 45, 'loc': 45, 'irb': 45, '2019': 45, '1070': 45} valid_fraction=1.0",fmap,5,,magnitude2,5,,,False
+2178-0220,2178-0220-3578-7607,"text='T1 Mapping' tokens={'t1': 80, 'mapping': 80} valid_fraction=1.0",fmap,5,,magnitude1,5,,,False
+2178-0220,2178-0220-3578-7607,"text='MRS MV' tokens={'mrs': 2, 'mv': 2} valid_fraction=1.0",func,5,,bold,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Brain MRE' tokens={'brain': 4608, 'mre': 4608} valid_fraction=1.0",anat,5,,T1w,5,,,False
+2178-0220,2178-0220-3578-7607,"text='AA OSS SNR: Brain MRE' tokens={'aa': 48, 'oss': 48, 'snr': 48, 'brain': 48, 'mre': 48} valid_fraction=1.0",func,7,,bold,3,,,False
+2178-0220,2178-0220-3578-7607,"text='Magnitude: Brain MRE' tokens={'magnitude': 48, 'brain': 48, 'mre': 48} valid_fraction=1.0",fmap,5,,epi,7,,,False
+2178-0220,2178-0220-3578-7607,"text='Ax DSC-GRE' tokens={'ax': 1600, 'dsc': 1600, 'gre': 1600} valid_fraction=1.0",anat,5,,T1w,5,,,False
+2178-0220,2178-0220-3578-7607,"text='PE Phs and Mag: Brain MRE :-Q' tokens={'pe': 768, 'phs': 768, 'and': 768, 'mag': 768, 'brain': 768, 'mre': 768, 'q': 768} valid_fraction=1.0",dwi,5,,dwi,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Ax 2D MAGIC 3mm' tokens={'ax': 768, '2d': 768, 'magic': 768, '3mm': 768} valid_fraction=1.0",perf,5,,m0scan,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Ax T1' tokens={'ax': 29, 't1': 29} valid_fraction=1.0",dwi,5,,dwi,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Ax Flair' tokens={'ax': 35, 'flair': 35} valid_fraction=1.0",anat,5,,FLAIR,5,,,False
+2178-0220,2178-0220-3578-7607,"text='FE Phs and Mag: Brain MRE' tokens={'fe': 768, 'phs': 768, 'and': 768, 'mag': 768, 'brain': 768, 'mre': 768} valid_fraction=1.0",func,5,,sbref,5,,,False
+2178-0220,2178-0220-3578-7607,"text='SS Curl Waves: Brain MRE :-Q' tokens={'ss': 384, 'curl': 384, 'waves': 384, 'brain': 384, 'mre': 384, 'q': 384} valid_fraction=1.0",anat,5,,T2w,5,,,False
+2178-0220,2178-0220-3578-7607,text='CBF' tokens={'cbf': 26} valid_fraction=1.0,func,5,,bold,1,,,False
+2178-0220,2178-0220-3578-7607,"text='+C Ax 3D T1' tokens={'c': 248, 'ax': 248, '3d': 248, 't1': 248} valid_fraction=1.0",fmap,5,,fieldmap,5,,,False
+2178-0220,2178-0220-3578-7607,"text='FA: b1000 [No-Q]' tokens={'fa': 44, 'b1000': 44, 'no': 44, 'q': 44} valid_fraction=1.0",func,5,,sbref,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Ax DCE' tokens={'ax': 1200, 'dce': 1200} valid_fraction=1.0",func,5,,sbref,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Trace: b1000' tokens={'trace': 44, 'b1000': 44} valid_fraction=1.0",anat,5,,T1w,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Loss Modulus: Brain MRE :-Q' tokens={'loss': 48, 'modulus': 48, 'brain': 48, 'mre': 48, 'q': 48} valid_fraction=1.0",func,5,,sbref,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Storage Modulus: Brain MRE :-Q' tokens={'storage': 48, 'modulus': 48, 'brain': 48, 'mre': 48, 'q': 48} valid_fraction=1.0",fmap,5,,fieldmap,5,,,False
+2178-0220,2178-0220-3578-7607,"text='+C Ax T1' tokens={'c': 29, 'ax': 29, 't1': 29} valid_fraction=1.0",dwi,5,,dwi,5,,,False
+2178-0220,2178-0220-3578-7607,"text='SS Phs and Mag: Brain MRE :-Q' tokens={'ss': 768, 'phs': 768, 'and': 768, 'mag': 768, 'brain': 768, 'mre': 768, 'q': 768} valid_fraction=1.0",fmap,5,,magnitude1,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Divergence: Brain MRE :-Q' tokens={'divergence': 384, 'brain': 384, 'mre': 384, 'q': 384} valid_fraction=1.0",fmap,5,,magnitude2,5,,,False
+2178-0220,2178-0220-3578-7607,"text='RFMT Sag 3D T1' tokens={'rfmt': 172, 'sag': 172, '3d': 172, 't1': 172} valid_fraction=1.0",anat,5,,T1w,5,,,False
+2178-0220,2178-0220-3578-7607,"text='PE Curl Waves: Brain MRE :-Q' tokens={'pe': 384, 'curl': 384, 'waves': 384, 'brain': 384, 'mre': 384, 'q': 384} valid_fraction=1.0",fmap,5,,magnitude2,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Stiffness: Brain MRE' tokens={'stiffness': 48, 'brain': 48, 'mre': 48} valid_fraction=1.0",anat,5,,FLAIR,5,,,False
+2178-0220,2178-0220-3578-7607,"text='Ax DTI' tokens={'ax': 308, 'dti': 308} valid_fraction=1.0",fmap,5,sadsd,magnitude1,5,asdsdf,,False
