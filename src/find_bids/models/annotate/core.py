@@ -442,6 +442,24 @@ def get_next_session_for_annotation(
         return (subject_id, session_id)
     return (None, None)
 
+def get_all_sessions_for_annotation(
+    conn: sqlite3.Connection,
+    w_entropy: float = 0.5,
+    w_protocol: float = 0.3,
+    w_class_balance: float = 0.2,
+    w_random: float = 0.0
+) -> list[tuple[str, Optional[str]]]:
+    """Retrieve a list of all unannotated sessions available for annotation."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT subject_id, session_id
+        FROM session_annotations_metrics
+        WHERE is_annotated = 0
+        ORDER BY ((? * inferred_datatype_entropy) + (? * protocol_score) + (? * class_balance_score) + (? * RANDOM())) DESC
+    """, (w_entropy, w_protocol, w_class_balance, w_random))
+    results = cursor.fetchall()
+    return [(subject_id, session_id) for subject_id, session_id in results]
+
 def mark_session_as_annotated(conn: sqlite3.Connection, subject_id: str, session_id: Optional[str]) -> None:
     """Mark a specific session as annotated in the database."""
     cursor = conn.cursor()
