@@ -207,7 +207,11 @@ class SessionAnnotation(BaseModel):
         return self.model_copy(update={"series_annotations": series_annotations, "notes": combined_notes, "is_annotated": True})
     
     def save_to_csv(self, file_path: str | Path) -> None:
-        """Append annotated series annotations for the session to a CSV file."""
+        """
+        Append annotated series annotations for the session to a CSV file.
+        Look for existing annotations for the same subject, session, and series description to avoid duplicates.
+        Overwrite existing annotations for the same subject, session, and series description with the new annotation.
+        """
         file_path = Path(file_path)
         rows = []
         for series_annotation in self.series_annotations:
@@ -227,7 +231,13 @@ class SessionAnnotation(BaseModel):
             rows.append(row)
         df = pd.DataFrame(rows)
         if file_path.exists():
-            df.to_csv(file_path, mode='a', header=False, index=False)
+            existing_df = pd.read_csv(file_path)
+            existing_df = existing_df.replace({np.nan: None})
+            # Remove existing annotations for the same subject, session, and series description
+            for _, row in df.iterrows():
+                existing_df = existing_df[~((existing_df['subject'] == row['subject']) & (existing_df['session'] == row['session']) & (existing_df['series_description'] == row['series_description']))]
+            combined_df = pd.concat([existing_df, df], ignore_index=True)
+            combined_df.to_csv(file_path, index=False)
         else:
             df.to_csv(file_path, index=False)
     
