@@ -454,7 +454,6 @@ def get_all_sessions_for_annotation(
     cursor.execute("""
         SELECT subject_id, session_id
         FROM session_annotations_metrics
-        WHERE is_annotated = 0
         ORDER BY ((? * inferred_datatype_entropy) + (? * protocol_score) + (? * class_balance_score) + (? * RANDOM())) DESC
     """, (w_entropy, w_protocol, w_class_balance, w_random))
     results = cursor.fetchall()
