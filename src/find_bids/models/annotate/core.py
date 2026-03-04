@@ -119,6 +119,13 @@ class SeriesAnnotation(BaseModel):
                     tokens.append(field.text)
         return "|".join(tokens) if tokens else "unknown_protocol"
     
+    @property
+    def annotated(self) -> bool:
+        """Check if the series has been annotated with a datatype (and suffix if applicable)."""
+        if self.datatype.datatype in {Datatype.EXCLUDE, Datatype.UNKNOWN}:
+            return True
+        return self.datatype is not None and self.datatype.datatype is not None and (self.suffix is not None or not BIDS_SCHEMA.get(self.datatype.datatype, {}))
+    
     def set_datatype(self, new_datatype: Datatype, confidence: Optional[int] = None, notes: Optional[str] = None) -> Self:
         """Return a new SeriesAnnotation with an updated datatype annotation."""
         new_datatype_annotation = self.datatype.annotate(new_datatype, confidence, notes)
@@ -141,7 +148,6 @@ class SessionAnnotation(BaseModel):
     session: Optional[str] = Field(None, description="Session identifier (if applicable).")
     series_annotations: list[SeriesAnnotation] = Field(..., description="List of annotations for each series in the session.")
     notes: Optional[str] = Field(None, description="Additional notes or comments about the session annotation.")
-    is_annotated: bool = Field(False, description="Flag indicating whether the session has been annotated.")
     
     @property
     def inferred_datatype_entropy(self) -> Optional[float]:
@@ -161,10 +167,15 @@ class SessionAnnotation(BaseModel):
         signature = "|".join(sorted(unique_fingerprints))
         return signature
     
+    @property
+    def annotated(self) -> bool:
+        """Check if all series in the session have been annotated."""
+        return all(series.annotated for series in self.series_annotations)
+    
     @classmethod
     def from_session_features(cls, series_annotations: list[SeriesAnnotation], subject: str, session: Optional[str] = None, notes: Optional[str] = None) -> Self:
         """Create a SessionAnnotation instance from a list of SeriesAnnotation instances."""
-        return cls(subject=subject, session=session, series_annotations=series_annotations, notes=notes, is_annotated=False)
+        return cls(subject=subject, session=session, series_annotations=series_annotations, notes=notes)
     
     @classmethod
     def from_csv(cls, file_path: str | Path, series_features: list[SeriesFeatures], subject: str, session: Optional[str] = None) -> Self:
@@ -191,6 +202,7 @@ class SessionAnnotation(BaseModel):
                 confidence=row.get('suffix_confidence'),
                 notes=row.get('suffix_notes')
             ) if pd.notna(row.get('suffix')) else None
+            
             series_annotation = SeriesAnnotation(
                 features=matching_features,
                 inferred_datatype=None,
@@ -199,12 +211,12 @@ class SessionAnnotation(BaseModel):
                 notes=row.get('series_notes')
             )
             series_annotations.append(series_annotation)
-        return cls(subject=subject, session=session, series_annotations=series_annotations, notes=None, is_annotated=True)
+        return cls(subject=subject, session=session, series_annotations=series_annotations, notes=None)
     
     def annotate(self, series_annotations: list[SeriesAnnotation], notes: Optional[str] = None) -> Self:
         """Return a new SessionAnnotation with updated series annotations and marked as annotated."""
         combined_notes = f"{self.notes}\n{notes}" if self.notes and notes else notes if notes else self.notes
-        return self.model_copy(update={"series_annotations": series_annotations, "notes": combined_notes, "is_annotated": True})
+        return self.model_copy(update={"series_annotations": series_annotations, "notes": combined_notes})
     
     def save_to_csv(self, file_path: str | Path) -> None:
         """
@@ -226,7 +238,6 @@ class SessionAnnotation(BaseModel):
                 "suffix_confidence": series_annotation.suffix.confidence if series_annotation.suffix else None,
                 "suffix_notes": series_annotation.suffix.notes if series_annotation.suffix else None,
                 "series_notes": series_annotation.notes,
-                "is_annotated": self.is_annotated
             }
             rows.append(row)
         df = pd.DataFrame(rows)
@@ -249,17 +260,17 @@ class AllSessionsAnnotation(BaseModel):
     @property
     def is_fully_annotated(self) -> bool:
         """Check if all sessions in the dataset have been annotated."""
-        return all(session.is_annotated for session in self.sessions)
+        return all(session.annotated for session in self.sessions)
     
     @property
     def annotated(self) -> list[SessionAnnotation]:
         """Return a list of sessions that have been annotated."""
-        return [session for session in self.sessions if session.is_annotated]
+        return [session for session in self.sessions if session.annotated]
     
     @property
     def unannotated(self) -> list[SessionAnnotation]:
         """Return a list of sessions that have not been annotated."""
-        return [session for session in self.sessions if not session.is_annotated]
+        return [session for session in self.sessions if not session.annotated]
     
     @property
     def global_datatype_distribution(self) -> dict[Datatype, int]:
@@ -296,7 +307,7 @@ class AllSessionsAnnotation(BaseModel):
                     datatype_annotation = DatatypeAnnotation(datatype=Datatype.UNKNOWN, confidence=None, notes="Inferred from features")
                     series_annotation = SeriesAnnotation(features=features, datatype=datatype_annotation, inferred_datatype=None, suffix=None, notes=None)
                     series_annotations.append(series_annotation)
-                session_annotation = SessionAnnotation(subject=subject_id, session=session_id, series_annotations=series_annotations, notes=None, is_annotated=False)
+                session_annotation = SessionAnnotation(subject=subject_id, session=session_id, series_annotations=series_annotations, notes=None)
                 sessions.append(session_annotation)
         return cls(sessions=sessions, notes=notes, annotator=annotator)
     
@@ -421,7 +432,7 @@ class AllSessionsAnnotation(BaseModel):
                 protocol_score,
                 session.inferred_datatype_entropy,
                 class_balance_score,
-                1 if session.is_annotated else 0
+                1 if session.annotated else 0
             ))
         conn.commit()
         
