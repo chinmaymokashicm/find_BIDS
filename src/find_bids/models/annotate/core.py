@@ -178,10 +178,10 @@ class SessionAnnotation(BaseModel):
         return cls(subject=subject, session=session, series_annotations=series_annotations, notes=notes)
     
     @classmethod
-    def from_csv(cls, file_path: str | Path, series_features: list[SeriesFeatures], subject: str, session: Optional[str] = None) -> Self:
+    def from_csv(cls, df: pd.DataFrame, series_features: list[SeriesFeatures], subject: str, session: Optional[str] = None) -> Self:
         """Load series annotations for a session from a CSV file and create a SessionAnnotation instance."""
-        file_path = Path(file_path)
-        df = pd.read_csv(file_path)
+        # file_path = Path(file_path)
+        # df = pd.read_csv(file_path)
         df = df.replace({np.nan: None})  # Replace NaN with None for easier handling of missing values
         session_df = df[(df['subject'] == subject) & (df['session'] == session)]
         series_annotations = []
