@@ -63,8 +63,6 @@ class MTState(str, Enum):
 # ============================================================
 
 # datatype → suffix → allowed entities
-# Entities listed here are OPTIONAL unless required by BIDS spec.
-# We only encode structural validity here.
 BIDS_SCHEMA: dict[Datatype, dict[str, set[str]]] = {
 
     Datatype.ANAT: {

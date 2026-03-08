@@ -13,7 +13,7 @@ import random, json
 
 from ..extract.series import SeriesFeatures
 from ..infer.schema import BIDS_SCHEMA, Datatype
-from ..infer.core import infer_bids_datatype
+# from ..infer.core import infer_bids_datatype
 
 from typing import Optional, Any, Self
 import sqlite3
@@ -99,11 +99,11 @@ class SeriesAnnotation(BaseModel):
         
         return values
     
-    @model_validator(mode="after")
-    def infer_datatype(self) -> Self:
-        """Infer the BIDS datatype based on the series features."""
-        self.inferred_datatype = Datatype(infer_bids_datatype(self.features)) if self.features else None
-        return self
+    # @model_validator(mode="after")
+    # def infer_datatype(self) -> Self:
+    #     """Infer the BIDS datatype based on the series features."""
+    #     self.inferred_datatype = Datatype(all_datatype_scores(self.features)) if self.features else None
+    #     return self
     
     @property
     def protocol_fingerprint(self) -> str:
