@@ -12,7 +12,7 @@ Series can either be:
 from .series import SeriesFeatures
 
 import os, re, json
-from pathlib import Path, Path
+# from pathlib import Path
 from typing import Optional, Iterable, Iterator, Self, Any, Literal
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 import sqlite3
@@ -22,14 +22,15 @@ import pydicom as dicom
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, track
 import numpy as np
 import pandas as pd
+from upath import UPath
 
 class Series(BaseModel):
     series_id: str
-    path: Path
+    path: UPath
 
 class Session(BaseModel):
     session_id: str
-    path: Path
+    path: UPath
     series: Optional[list[Series]] = None
     bids_session_id: Optional[str] = None
 
@@ -39,8 +40,8 @@ class Subject(BaseModel):
     bids_participant_id: Optional[str] = None
 
 class Dataset(BaseModel):
-    dir_root: Path
-    features_root: Path
+    dir_root: UPath
+    features_root: UPath
     dtype: Literal["DICOM", "Nifti"]
     subjects: Optional[list[Subject]] = None
     
@@ -51,11 +52,11 @@ class Dataset(BaseModel):
         return sorted(self.subjects, key=lambda s: s.subject_id)
     
     @property
-    def csv_export_path(self) -> Path:
+    def csv_export_path(self) -> UPath:
         return self.features_root / "features.csv"
     
     @staticmethod
-    def validate_dicom_dir(dir_path: Path) -> bool:
+    def validate_dicom_dir(dir_path: UPath) -> bool:
         """
         Validate that the given directory contains DICOM files by checking for the presence of files with a .dcm extension or by attempting to read a sample file with pydicom.
         """
@@ -66,14 +67,15 @@ class Dataset(BaseModel):
         for file in dir_path.iterdir():
             if file.is_file():
                 try:
-                    dicom.dcmread(file, stop_before_pixels=True)
+                    with file.open("rb") as f:
+                        dicom.dcmread(f, stop_before_pixels=True)
                     return True
                 except Exception:
                     continue
         return False
     
     @staticmethod
-    def validate_nifti_dir(dir_path: Path) -> bool:
+    def validate_nifti_dir(dir_path: UPath) -> bool:
         """
         Validate that the given directory contains Nifti files by checking for the presence of files with .nii or .nii.gz extensions.
         """
@@ -81,16 +83,21 @@ class Dataset(BaseModel):
         return len(nifti_files) > 0
     
     @classmethod
-    def from_json(cls, json_path: str | Path) -> Self:
-        with open(json_path, "r") as f:
+    def from_json(cls, json_path: str | UPath) -> Self:
+        if isinstance(json_path, str):
+            json_path = UPath(json_path)
+        
+        # data = json.loads(json_path.read_text())
+        with json_path.open("r") as f:
             data = json.load(f)
+        
         return cls.model_validate(data)
     
     @classmethod
     def from_dir_with_subject_level(
         cls,
-        dir_root: str | Path,
-        features_root: str | Path,
+        dir_root: str | UPath,
+        features_root: str | UPath,
         dtype: Literal["DICOM", "Nifti"],
         session_subdir_path: str = "",
         series_subdir_path: str = "",
@@ -121,8 +128,8 @@ class Dataset(BaseModel):
         Returns:
             An instance of Dataset with the extracted hierarchy of subjects, sessions, and series.
         """
-        dir_root = Path(dir_root)
-        features_root = Path(features_root)
+        dir_root = UPath(dir_root)
+        features_root = UPath(features_root)
         if not features_root.exists():
             features_root.mkdir(parents=True, exist_ok=True)
         
@@ -168,8 +175,8 @@ class Dataset(BaseModel):
     @classmethod
     def from_dir_without_subject_level(
         cls,
-        dir_root: str | Path,
-        features_root: str | Path,
+        dir_root: str | UPath,
+        features_root: str | UPath,
         dtype: Literal["DICOM", "Nifti"],
         session_subdir_path: str = "",
         series_subdir_path: str = "",
@@ -197,8 +204,8 @@ class Dataset(BaseModel):
         Returns:
             An instance of Dataset with the extracted hierarchy of sessions and series.
         """
-        dir_root = Path(dir_root)
-        features_root = Path(features_root)
+        dir_root = UPath(dir_root)
+        features_root = UPath(features_root)
         if not features_root.exists():
             features_root.mkdir(parents=True, exist_ok=True)
         
@@ -261,24 +268,40 @@ class Dataset(BaseModel):
                 session.bids_session_id = f"{session_counter:04d}"
                 session_counter += 1
     
-    def generate_features(self, conn: Optional[sqlite3.Connection] = None) -> dict[str, dict[str, dict[str, SeriesFeatures]]]:
+    def search_series_by_id(self, subject_id: str, session_id: str, series_id: str) -> Optional[Series]:
+        """
+        Search for a series in the dataset by its subject ID, session ID, and series ID. Returns the Series object if found, or None if not found.
+        """
+        if self.subjects is None:
+            return None
+        for subject in self.subjects:
+            if subject.subject_id == subject_id:
+                for session in subject.sessions or []:
+                    if session.session_id == session_id:
+                        for series in session.series or []:
+                            if series.series_id == series_id:
+                                return series
+        return None
+    
+    def generate_features(self, conn: Optional[sqlite3.Connection] = None, skip_unavailable: bool = False, sample_subjects: Optional[int] = None) -> dict[str, dict[str, dict[str, SeriesFeatures]]]:
         """
         Generate features for all series in the dataset and save them to the features_root directory, maintaining the same hierarchy of subject/session/series.
         """
         if self.dtype == "DICOM":
-            return self._generate_dicom_features(conn)
+            return self._generate_dicom_features(conn, skip_unavailable=skip_unavailable, sample_subjects=sample_subjects)
         elif self.dtype == "Nifti":
             return self._generate_nifti_features()
         return {}
             
-    def _generate_dicom_features(self, conn: Optional[sqlite3.Connection] = None) -> dict[str, dict[str, dict[str, SeriesFeatures]]]:
+    def _generate_dicom_features(self, conn: Optional[sqlite3.Connection] = None, skip_unavailable: bool = False, sample_subjects: Optional[int] = None) -> dict[str, dict[str, dict[str, SeriesFeatures]]]:
         """
         Generate features for DICOM series by reading the DICOM files in each series directory and extracting relevant metadata and image statistics. Save the features to the features_root directory.
         """
         if self.subjects is None:
             return {}
         all_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = {}
-        for subject in track(self.subjects):
+        subjects_to_process = self.subjects if sample_subjects is None else self.subjects[:sample_subjects]
+        for subject in track(subjects_to_process):
             if subject.subject_id not in all_features:
                 all_features[subject.subject_id] = {}
             for session in subject.sessions or []:
@@ -289,10 +312,15 @@ class Dataset(BaseModel):
                         continue
                     features_save_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
                     if not features_save_path.exists():
-                        features = SeriesFeatures.from_dicom_series(series.path)
+                        try:
+                            features = SeriesFeatures.from_dicom_series(series.path)
+                        except Exception as e:
+                            if skip_unavailable:
+                                continue
+                            else:
+                                raise e
                         features_save_path.parent.mkdir(parents=True, exist_ok=True)
-                        with open(features_save_path, "w") as f:
-                            json.dump(features.model_dump(), f, indent=4)
+                        features_save_path.write_text(json.dumps(features.model_dump(), indent=4))
                     else:
                         features = SeriesFeatures.from_json(features_save_path)
                     all_features[subject.subject_id][session.session_id][series.series_id] = features
@@ -309,7 +337,8 @@ class Dataset(BaseModel):
         # if self.subjects is None:
         #     return {}
         # all_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = {}
-        # for subject in self.subjects or []:
+        # subjects_to_process = self.subjects if sample_subjects is None else self.subjects[:sample_subjects]
+        # for subject in subjects_to_process:
         #     for session in subject.sessions or []:
         #         for series in session.series or []:
         #             features = SeriesFeatures.from_nifti_series(series.path)
@@ -319,9 +348,8 @@ class Dataset(BaseModel):
     def to_json(self) -> dict:
         if self.subjects is None:
             return {}
-        export_path: Path = self.features_root / "dataset.json"
-        with open(export_path, "w") as f:
-            json.dump(self.model_dump(mode="json"), f, indent=4)
+        export_path: UPath = self.features_root / "dataset.json"
+        export_path.write_text(json.dumps(self.model_dump(mode="json"), indent=4))
         return self.model_dump()
     
     def export_all_features_to_table(self) -> None:
@@ -353,9 +381,9 @@ class Dataset(BaseModel):
                     }
                     records.append(record)
         df = pd.DataFrame(records)
-        df.to_csv(self.csv_export_path, index=False)
+        df.to_csv(self.csv_export_path, index=False) # type: ignore
     
-    def merge_features_tables(self, other_datasets: list[Self], save_path: str | Path) -> None:
+    def merge_features_tables(self, other_datasets: list[Self], save_path: str | UPath) -> None:
         """
         Merge the features tables from multiple datasets into a single CSV file. This is useful for comparing features across different datasets or for combining datasets for larger analyses.
         
@@ -365,16 +393,16 @@ class Dataset(BaseModel):
         """
         if any(not isinstance(ds, Dataset) for ds in other_datasets):
             raise ValueError("All items in other_datasets must be instances of Dataset")
-        save_path = Path(save_path)
+        save_path = UPath(save_path)
         if not save_path.parent.exists():
             save_path.parent.mkdir(parents=True, exist_ok=True)
         # Add column for dataset identifier to each dataset's features table
-        df = pd.read_csv(self.csv_export_path, low_memory=False)
+        df = pd.read_csv(str(self.csv_export_path), low_memory=False)
         df["root_data"] = str(self.dir_root)
         df["features_data"] = str(self.features_root)
         for other_ds in other_datasets:
-            other_df = pd.read_csv(other_ds.csv_export_path, low_memory=False)
+            other_df = pd.read_csv(str(other_ds.csv_export_path), low_memory=False)
             other_df["root_data"] = str(other_ds.dir_root)
             other_df["features_data"] = str(other_ds.features_root)
             df = pd.concat([df, other_df], ignore_index=True)
-        df.to_csv(save_path, index=False)
+        df.to_csv(str(save_path), index=False)

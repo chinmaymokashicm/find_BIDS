@@ -7,7 +7,7 @@ The idea is to have a Dockerized annotation UI that can be used to annotate seri
 - Allow the user to annotate series with BIDS labels (datatype and suffix).
 - Store annotations in a standardized format (e.g., JSON) for downstream use in BIDS conversion and inference model training.
 """
-from pathlib import Path
+# from pathlib import Path
 from collections import Counter
 import random, json
 
@@ -21,10 +21,11 @@ import sqlite3
 from pydantic import BaseModel, Field, model_validator, EmailStr
 import pandas as pd
 import numpy as np
+from upath import UPath
 
-def initialize_annotations_metrics_db(db_path: Path) -> sqlite3.Connection:
+def initialize_annotations_metrics_db(db_path: UPath) -> sqlite3.Connection:
     """Initialize the SQLite database for storing key metrics, for efficient querying when sampling for annotations."""
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS session_annotations_metrics (
@@ -218,13 +219,13 @@ class SessionAnnotation(BaseModel):
         combined_notes = f"{self.notes}\n{notes}" if self.notes and notes else notes if notes else self.notes
         return self.model_copy(update={"series_annotations": series_annotations, "notes": combined_notes})
     
-    def save_to_csv(self, file_path: str | Path) -> None:
+    def save_to_csv(self, file_path: str | UPath) -> None:
         """
         Append annotated series annotations for the session to a CSV file.
         Look for existing annotations for the same subject, session, and series description to avoid duplicates.
         Overwrite existing annotations for the same subject, session, and series description with the new annotation.
         """
-        file_path = Path(file_path)
+        file_path = UPath(file_path)
         rows = []
         for series_annotation in self.series_annotations:
             row = {
@@ -242,15 +243,15 @@ class SessionAnnotation(BaseModel):
             rows.append(row)
         df = pd.DataFrame(rows)
         if file_path.exists():
-            existing_df = pd.read_csv(file_path)
+            existing_df = pd.read_csv(str(file_path))
             existing_df = existing_df.replace({np.nan: None})
             # Remove existing annotations for the same subject, session, and series description
             for _, row in df.iterrows():
                 existing_df = existing_df[~((existing_df['subject'] == row['subject']) & (existing_df['session'] == row['session']) & (existing_df['series_description'] == row['series_description']))]
             combined_df = pd.concat([existing_df, df], ignore_index=True)
-            combined_df.to_csv(file_path, index=False)
+            combined_df.to_csv(str(file_path), index=False)
         else:
-            df.to_csv(file_path, index=False)
+            df.to_csv(str(file_path), index=False)
     
 class AllSessionsAnnotation(BaseModel):
     sessions: list[SessionAnnotation] = Field(..., description="List of session annotations for the dataset.")
@@ -385,9 +386,9 @@ class AllSessionsAnnotation(BaseModel):
     
     # !Do not use this method in the annotation UI, as it will overwrite existing annotations without warning! 
     # !This is intended for use in testing or if you want to reset all annotations and start over.
-    def to_csv(self, file_path: str | Path) -> None:
+    def to_csv(self, file_path: str | UPath) -> None:
         """Export annotated session annotations to a CSV file."""
-        file_path = Path(file_path)
+        file_path = UPath(file_path)
         rows = []
         for session in self.annotated:
             for series_annotation in session.series_annotations:
@@ -404,7 +405,7 @@ class AllSessionsAnnotation(BaseModel):
                 }
                 rows.append(row)
         df = pd.DataFrame(rows)
-        df.to_csv(file_path, index=False)
+        df.to_csv(str(file_path), index=False)
         
     def export_annotation_metrics_to_sqlite(self, conn: sqlite3.Connection) -> None:
         """Export key metrics for each session to a SQLite database for efficient querying when sampling for annotations."""

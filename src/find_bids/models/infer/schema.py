@@ -62,7 +62,6 @@ class MTState(str, Enum):
 # BIDS Schema Registry
 # ============================================================
 
-# datatype → suffix → allowed entities
 BIDS_SCHEMA: dict[Datatype, dict[str, set[str]]] = {
 
     Datatype.ANAT: {
@@ -70,6 +69,11 @@ BIDS_SCHEMA: dict[Datatype, dict[str, set[str]]] = {
         "T2w": {"acq", "run", "part", "echo"},
         "FLAIR": {"acq", "run"},
         "PD": {"acq", "run"},
+        "T2starw": {"acq", "run", "part", "echo"},
+        "SWI": {"acq", "run", "part"},
+        # --- Common Derivatives ---
+        "T1map": {"acq", "run", "echo"},
+        "T2map": {"acq", "run", "echo"},
     },
 
     Datatype.FUNC: {
@@ -79,6 +83,9 @@ BIDS_SCHEMA: dict[Datatype, dict[str, set[str]]] = {
 
     Datatype.DWI: {
         "dwi": {"acq", "dir", "run"},
+        # --- Common Derivatives ---
+        "adc": {"acq", "run"},
+        "fa": {"acq", "run"},
     },
 
     Datatype.FMAP: {
@@ -92,9 +99,14 @@ BIDS_SCHEMA: dict[Datatype, dict[str, set[str]]] = {
     Datatype.PERF: {
         "asl": {"acq", "run"},
         "m0scan": {"acq", "run"},
+        "dsc": {"acq", "run"},
+        "dce": {"acq", "run"},
+        # --- Common Derivatives ---
+        "cbf": {"acq", "run"}, 
+        "cbv": {"acq", "run"},
+        "mtt": {"acq", "run"},
     },
 
-    Datatype.EXCLUDE: {},
     Datatype.UNKNOWN: {},
 }
 
@@ -111,7 +123,7 @@ class LabelProbabilities(BaseModel):
     def validate_probabilities(cls, v: list[dict | LabelProbability]) -> list[LabelProbability]:
         if not isinstance(v, list):
             raise ValueError("LabelProbabilities must be initialized with a list of LabelProbability or dicts.")
-        validated = []
+        validated: list[LabelProbability] = []
         for item in v:
             if isinstance(item, LabelProbability):
                 validated.append(item)
@@ -119,6 +131,12 @@ class LabelProbabilities(BaseModel):
                 validated.append(LabelProbability(**item))
             else:
                 raise ValueError(f"Invalid item in probabilities list: {item}")
+        
+        # Check that probabilities sum to 1 (allowing for small floating point errors)
+        total_prob = sum(lp.probability for lp in validated)
+        if not math.isclose(total_prob, 1.0, abs_tol=1e-6):
+            raise ValueError(f"Probabilities must sum to 1. Got {total_prob} instead.")
+            
         return validated
     
     @property

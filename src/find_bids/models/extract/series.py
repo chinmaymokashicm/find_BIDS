@@ -24,11 +24,12 @@ Stages:
 The next step is to implement an inference pipeline that takes these extracted features and applies rule-based logic or machine learning classifiers to predict BIDS entities and organize the data accordingly.
 """
 
-import os, re, json
+import os, re, json, hashlib
 from datetime import datetime
-from pathlib import Path, Path
+# from pathlib import Path
 from typing import Optional, Iterable, Iterator, Self, Any
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+import sqlite3
 
 from pydantic import BaseModel, field_validator, ConfigDict
 import pydicom as dicom
@@ -36,15 +37,16 @@ from rich.progress import track, Progress, TextColumn, BarColumn, TimeRemainingC
 import numpy as np
 from pydicom.multival import MultiValue
 from pydicom.valuerep import DSfloat
+from upath import UPath
 # from tinydb import TinyDB, Query
-import sqlite3
 
 CAMEL_TO_SNAKE_CASE_PATTERN: re.Pattern = re.compile(r'(?<!^)(?=[A-Z])')
 SNAKE_TO_CAMEL_CASE_PATTERN: re.Pattern = re.compile(r'(_)([a-z])')
 PASCAL_TO_SNAKE_CASE_PATTERN: re.Pattern = re.compile(r'(?<!^)(?=[A-Z])')
 SNAKE_TO_PASCAL_CASE_PATTERN: re.Pattern = re.compile(r'(_)([a-z])')
 
-_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9]+")
+# _TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9]+")
+_TOKEN_PATTERN = re.compile(r"[^a-zA-Z0-9_\-\s]")
 
 def indent_block(text: str, indent: int = 2) -> str:
     pad = " " * indent
@@ -69,11 +71,65 @@ def format_section(title: str, items: list[tuple[str, Any]]) -> str:
         lines.append(f"  {label}: {humanize_value(value)}")
     return "\n".join(lines)
 
-def read_dicom_header(path: Path) -> Optional[dicom.Dataset]:
+def read_dicom_header(path: UPath) -> Optional[dicom.Dataset]:
     try:
-        return dicom.dcmread(path, stop_before_pixels=True)
+        with path.open("rb") as f:
+            ds = dicom.dcmread(f, stop_before_pixels=True)
+        return ds
     except Exception:
         return None
+
+def get_tag_value(ds: dicom.Dataset, tag: str | tuple[int, int], default=None) -> Optional[Any]:
+    """Fetch value by keyword or (Group, Element) tuple."""
+    try:
+        if isinstance(tag, str):
+            return getattr(ds, tag, default)
+        if tag in ds:
+            return ds[tag].value
+    except Exception:
+        pass
+    return default
+
+def get_diffusion_params(ds: dicom.Dataset) -> tuple[Optional[float], Optional[str]]:
+    
+    b = None
+    g = None
+
+    # ----- Standard -----
+    b = get_tag_value(ds, "DiffusionBValue")
+    g = get_tag_value(ds, "DiffusionGradientDirection")
+
+    # ----- Siemens -----
+    if b is None:
+        b = get_tag_value(ds, (0x0019, 0x100C))
+
+    if g is None:
+        g = get_tag_value(ds, (0x0019, 0x100E))
+
+    # ----- GE -----
+    if b is None:
+        ge_val = get_tag_value(ds, (0x0043, 0x1039))
+        if ge_val is not None and isinstance(ge_val, (list, MultiValue)):
+            b = ge_val[0]
+
+    if g is None:
+        gx = get_tag_value(ds, (0x0019, 0x10BB))
+        gy = get_tag_value(ds, (0x0019, 0x10BC))
+        gz = get_tag_value(ds, (0x0019, 0x10BD))
+        if None not in (gx, gy, gz):
+            g = f"{gx}\\{gy}\\{gz}"
+
+    # ----- Normalize B-value -----
+    b = dsfloat_to_float(b) if isinstance(b, DSfloat) else b
+    try:
+        b = float(b) if b is not None else None
+    except Exception:
+        b = None
+
+    # ----- Normalize Gradient -----
+    g = multivalue_to_string(g)
+
+    return b, g
 
 def parse_dicom_time(time_str: Optional[str]) -> Optional[float]:
     if time_str is None:
@@ -120,26 +176,12 @@ def parse_dicom_date_time(date_str: Optional[str], time_str: Optional[str]) -> O
     except Exception:
         return None
 
-def get_tag_value(ds: dicom.Dataset, tag: str, default=None) -> Optional[Any]:
-    if hasattr(ds, tag):
-        return getattr(ds, tag)
-    return default
-
 def normalize_category(v: Any) -> Optional[str]:
     if v is None:
         return None
     if isinstance(v, (list, tuple)):
         return "\\".join(map(str, v))
     return str(v).strip().lower()
-
-# def multivalue_to_string(value: Optional[MultiValue | str]) -> Optional[str]:
-#     if value is None:
-#         return None
-#     if not isinstance(value, (MultiValue, str)):
-#         raise ValueError(f"Expected a MultiValue or str, got {type(value)}")
-#     if isinstance(value, str):
-#         return value
-#     return " ".join(str(v) for v in value)
 
 def multivalue_to_string(value: Optional[Any]) -> Optional[str]:
     if value is None:
@@ -165,9 +207,26 @@ def extract_dicom_tokens(text: Optional[str]) -> list[str]:
     text = re.sub(r"[_\-]", " ", text)
     return _TOKEN_PATTERN.findall(text)
 
-def initialize_features_db(db_path: Path) -> sqlite3.Connection:
+def generate_token_ngrams(tokens: list[str]) -> set[str]:
+    """Generate unigrams + bigrams + trigrams for keyword matching."""
+    
+    token_set = set(tokens)
+
+    bigrams = {
+        tokens[i] + tokens[i+1]
+        for i in range(len(tokens) - 1)
+    }
+
+    trigrams = {
+        tokens[i] + tokens[i+1] + tokens[i+2]
+        for i in range(len(tokens) - 2)
+    }
+
+    return token_set | bigrams | trigrams
+
+def initialize_features_db(db_path: UPath) -> sqlite3.Connection:
     if not db_path.exists():
-        with sqlite3.connect(db_path) as conn:
+        with sqlite3.connect(str(db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS series_features (
@@ -180,7 +239,7 @@ def initialize_features_db(db_path: Path) -> sqlite3.Connection:
                 )
             """)
             conn.commit()
-    return sqlite3.connect(db_path)
+    return sqlite3.connect(str(db_path))
 
 class SeriesNumericFeature(BaseModel):
     value: Optional[float] # Robust central tendency measure (e.g. median)
@@ -307,6 +366,7 @@ class SeriesTextFeature(BaseModel):
         for text in valid_texts:
             text_counts[text] = text_counts.get(text, 0) + 1
             tokens = extract_dicom_tokens(text)
+            tokens = generate_token_ngrams(tokens)
             for token in tokens:
                 token_counts[token] = token_counts.get(token, 0) + 1
         mode_text = max(text_counts, key=lambda x: text_counts[x])
@@ -349,34 +409,18 @@ class GeometryFeatures(BaseModel):
         columns = SeriesNumericFeature.from_values(
             get_tag_value(ds, "Columns", None) for ds in datasets
         )
-
-        slice_positions = [
-            get_tag_value(ds, "ImagePositionPatient", None)
-            for ds in datasets
-        ]
-        num_slices = len(set(str(p) for p in slice_positions if p is not None)) or None
+        
+        # Use a tolerance when comparing ImagePositionPatient values to account for minor variations across slices
+        unique_positions = set()
+        for ds in datasets:
+            pos = get_tag_value(ds, "ImagePositionPatient")
+            if pos:
+                unique_positions.add(tuple(round(float(x), 3) for x in pos))
+        
+        num_slices = len(unique_positions) or None
 
         dx = dy = dz = None
         if rows.value and columns.value:
-            # px = SeriesNumericFeature.from_values(
-            #     get_tag_value(ds, "PixelSpacing", [None, None])[0]
-            #     if hasattr(ds, "PixelSpacing") else None
-            #     for ds in datasets
-            # )
-            # py = SeriesNumericFeature.from_values(
-            #     get_tag_value(ds, "PixelSpacing", [None, None])[1]
-            #     if hasattr(ds, "PixelSpacing") else None
-            #     for ds in datasets
-            # )
-            # dz = SeriesNumericFeature.from_values(
-            #     get_tag_value(ds, "SliceThickness", None)
-            #     for ds in datasets
-            # )
-
-            # if px.value and py.value and dz.value:
-            #     dx = px.value
-            #     dy = py.value
-            #     dz = dz.value
             for ds in datasets:
                 if hasattr(ds, "PixelSpacing") and hasattr(ds, "SliceThickness"):
                     ps = get_tag_value(ds, "PixelSpacing", [None, None])
@@ -403,7 +447,8 @@ class GeometryFeatures(BaseModel):
 
         geometry_hash = None
         if matrix_size and voxel_size:
-            geometry_hash = hash((matrix_size, voxel_size))
+            geom_str = f"{matrix_size}_{voxel_size}"
+            geometry_hash = hashlib.md5(geom_str.encode()).hexdigest()
 
         return cls(
             rows=rows,
@@ -555,23 +600,21 @@ class TemporalFeatures(BaseModel):
         # ----------------------------
         # Geometry-derived flags
         # ----------------------------
-        is_3D = None
+        acq_type = normalize_category(get_tag_value(datasets[0], "MRAcquisitionType"))
+        if acq_type == "3d":
+            is_3D = True
+        elif acq_type == "2d":
+            is_3D = False
+        else:
+            # Fallback: Many slices + No timepoints usually = 3D Structural
+            is_3D = bool(geometry and geometry.num_slices and geometry.num_slices > 50 and not num_timepoints)
+
         is_isotropic = None
-
-        if geometry:
-            if geometry.num_slices and num_timepoints:
-                is_3D = False
-            elif geometry.num_slices and not num_timepoints:
-                is_3D = True
-
-            if geometry.voxel_size:
-                dx, dy, dz = geometry.voxel_size
-                if dx and dy and dz:
-                    tol = 0.1
-                    is_isotropic = (
-                        abs(dx - dy) < tol and
-                        abs(dx - dz) < tol
-                    )
+        if geometry and geometry.voxel_size:
+            dims = [d for d in geometry.voxel_size if d]
+            if len(dims) == 3:
+                # Check if the largest dimension is within 10% of the smallest
+                is_isotropic = (max(dims) / min(dims)) < 1.1
 
         return cls(
             repetition_time=repetition_time,
@@ -627,34 +670,48 @@ class DiffusionFeatures(BaseModel):
     
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
-        datasets = list(datasets)
+        # datasets = list(datasets)
 
-        volume_map = {}  # (bval, gradient) -> count
-        has_diffusion_flags = []
+        # volume_map = {}  # (bval, gradient) -> count
+        # has_diffusion_flags = []
 
+        # for ds in datasets:
+        #     b = get_tag_value(ds, "DiffusionBValue", None)
+        #     g = get_tag_value(ds, "DiffusionGradientDirection", None)
+
+        #     if b is None:
+        #         has_diffusion_flags.append(False)
+        #         continue
+
+        #     has_diffusion_flags.append(True)
+
+        #     b = float(b)
+        #     gradient = (
+        #         tuple(round(float(x), 5) for x in g)
+        #         if g is not None and len(g) == 3
+        #         else None
+        #     )
+
+        #     vol_key = (b, gradient)
+
+        #     volume_map.setdefault(vol_key, 0)
+        #     volume_map[vol_key] += 1
+
+        # has_diffusion = SeriesBooleanFeature.from_values(has_diffusion_flags)
+        
+        volume_map = {}
+        
         for ds in datasets:
-            b = get_tag_value(ds, "DiffusionBValue", None)
-            g = get_tag_value(ds, "DiffusionGradientDirection", None)
-
-            if b is None:
-                has_diffusion_flags.append(False)
-                continue
-
-            has_diffusion_flags.append(True)
-
-            b = float(b)
-            gradient = (
-                tuple(round(float(x), 5) for x in g)
-                if g is not None and len(g) == 3
-                else None
-            )
-
+            b, g = get_diffusion_params(ds)
+            
+            if b is None: continue
+            
+            gradient = tuple(round(float(x), 4) for x in g) if g else None
             vol_key = (b, gradient)
+            volume_map[vol_key] = volume_map.get(vol_key, 0) + 1
 
-            volume_map.setdefault(vol_key, 0)
-            volume_map[vol_key] += 1
-
-        has_diffusion = SeriesBooleanFeature.from_values(has_diffusion_flags)
+        # If we found b-values, it IS a diffusion series
+        has_diffusion = SeriesBooleanFeature(value=len(volume_map) > 0, true_fraction=1.0 if volume_map else 0.0)
 
         if not volume_map:
             return cls(
@@ -858,10 +915,9 @@ class MultiEchoFeatures(BaseModel):
     
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
-        echo_times_raw = [get_tag_value(ds, "EchoTime", None) for ds in datasets]
-        echo_times_valid = [float(et) for et in echo_times_raw if et is not None]
-        
-        unique_echo_times = sorted(set(echo_times_valid)) if echo_times_valid else None
+        echo_times_raw = [get_tag_value(ds, "EchoTime") for ds in datasets]
+        # Round to 1 decimal place to handle micro-jitter
+        unique_echo_times = sorted({round(float(et), 1) for et in echo_times_raw if et is not None})
         
         echo_numbers_raw = [get_tag_value(ds, "EchoNumbers", None) for ds in datasets]
         echo_numbers_valid = []
@@ -875,13 +931,9 @@ class MultiEchoFeatures(BaseModel):
                     pass
         unique_echo_numbers = sorted(set(echo_numbers_valid)) if echo_numbers_valid else None
         
-        num_echoes = (
-            len(unique_echo_numbers) if unique_echo_numbers
-            else len(unique_echo_times) if unique_echo_times and len(unique_echo_times) > 1
-            else None
-        )
+        num_echoes = len(unique_echo_times) if len(unique_echo_times) > 1 else None
         
-        is_multi_echo = num_echoes is not None and num_echoes > 1
+        # is_multi_echo = num_echoes is not None and num_echoes > 1
         
         return cls(
             num_echoes=num_echoes,
@@ -1184,6 +1236,18 @@ class ImageTypeFeature(BaseModel):
                 ("Imaginary", self.is_imaginary),
             ],
         )
+    
+    @property
+    def is_derived(self) -> Optional[bool]:
+        if self.is_original and self.is_original.value:
+            return False
+        if any(f.value for f in [self.is_mpr, self.is_mip, self.is_projection, self.is_reformatted] if f):
+            return True
+        if any(f.value for f in [self.has_angio, self.has_diffusion, self.has_perfusion] if f):
+            return True
+        if any(f.value for f in [self.is_adc, self.is_fa, self.is_trace, self.is_cbf, self.is_cbv] if f):
+            return True
+        return None
     
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
@@ -1577,7 +1641,9 @@ class SeriesFeatures(BaseModel):
         return results
     
     @classmethod
-    def from_dicom_series(cls, series_dir: Path) -> Self:
+    def from_dicom_series(cls, series_dir: str | UPath) -> Self:
+        if isinstance(series_dir, str):
+            series_dir = UPath(series_dir)
         dicom_files = sorted(series_dir.glob("*.dcm"))
         if not dicom_files:
             raise ValueError(f"No DICOM files found in {series_dir}")
@@ -1589,7 +1655,7 @@ class SeriesFeatures(BaseModel):
         datasets = [ds for ds in datasets if ds is not None]
 
         if not datasets:
-            raise ValueError("No readable DICOM instances")
+            raise ValueError(f"No readable DICOM instances found in {series_dir}")
 
         # -----------------------
         # Core identifiers
@@ -1726,7 +1792,7 @@ class SeriesFeatures(BaseModel):
         )
         
     @classmethod
-    def from_nifti_series(cls, nifti_path: str | Path) -> Self:
+    def from_nifti_series(cls, nifti_path: str | UPath) -> Self:
         """Alternative constructor to build SeriesFeatures from a NIfTI file with sidecar JSON metadata"""
         # json_path = Path(nifti_path).with_suffix(".json")
         # if not json_path.exists():
@@ -1736,8 +1802,10 @@ class SeriesFeatures(BaseModel):
         raise NotImplementedError("NIfTI parsing not implemented yet - would require defining a standard JSON schema for the extracted features and ensuring the NIfTI sidecar JSON files are generated in the expected format during conversion from DICOM.")
 
     @classmethod
-    def from_json(cls, json_path: str | Path) -> Self:
-        with open(json_path, "r") as f:
+    def from_json(cls, json_path: str | UPath) -> Self:
+        if isinstance(json_path, str):
+            json_path = UPath(json_path)
+        with json_path.open("r") as f:
             data = json.load(f)
         return cls.model_validate(data)
     
