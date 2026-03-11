@@ -32,37 +32,69 @@ db_path = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
 # _ = initialize_annotations_metrics_db(db_path)
 
 # datasets = []
-all_series_features = {}
-for dataset_name, paths in dataset_info.items():
-    with ThreadPoolExecutor() as executor:
-        dir_root: UPath = paths["dicom_root"]
-        features_root: UPath = paths["features_root"]
-        subject_level: bool = paths["subject_level"]
-        if subject_level:
+# all_series_features = {}
+# futures = {}
+# for dataset_name, paths in dataset_info.items():
+#     with ThreadPoolExecutor() as executor:
+#         dir_root: UPath = paths["dicom_root"]
+#         features_root: UPath = paths["features_root"]
+#         subject_level: bool = paths["subject_level"]
+#         if subject_level:
+#             future = executor.submit(
+#                 Dataset.from_dir_with_subject_level,
+#                 dir_root=dir_root,
+#                 features_root=features_root,
+#                 dtype="DICOM",
+#                 session_subdir_path=paths["session_subdir_path"],
+#                 series_subdir_path=paths["series_subdir_path"]
+#             )
+#             print(f"Submitted task for {dataset_name} dataset with subject-level structure: {dir_root}")
+#         else:
+#             future = executor.submit(
+#                 Dataset.from_dir_without_subject_level,
+#                 dir_root=dir_root,
+#                 features_root=features_root,
+#                 dtype="DICOM",
+#                 session_subdir_path=paths["session_subdir_path"],
+#                 series_subdir_path=paths["series_subdir_path"]
+#             )
+#             print(f"Submitted task for {dataset_name} dataset with session-level structure: {dir_root}")
+#         dataset = future.result()
+futures = {}
+with ThreadPoolExecutor() as executor:
+    for dataset_name, paths in dataset_info.items():
+        if paths["subject_level"]:
             future = executor.submit(
                 Dataset.from_dir_with_subject_level,
-                dir_root=dir_root,
-                features_root=features_root,
+                dir_root=paths["dicom_root"],
+                features_root=paths["features_root"],
                 dtype="DICOM",
                 session_subdir_path=paths["session_subdir_path"],
                 series_subdir_path=paths["series_subdir_path"]
             )
-            print(f"Submitted task for {dataset_name} dataset with subject-level structure: {dir_root}")
         else:
             future = executor.submit(
                 Dataset.from_dir_without_subject_level,
-                dir_root=dir_root,
-                features_root=features_root,
+                dir_root=paths["dicom_root"],
+                features_root=paths["features_root"],
                 dtype="DICOM",
                 session_subdir_path=paths["session_subdir_path"],
                 series_subdir_path=paths["series_subdir_path"]
             )
-            print(f"Submitted task for {dataset_name} dataset with session-level structure: {dir_root}")
-        dataset = future.result()
+        futures[future] = dataset_name
+
+for future in as_completed(futures):
+    dataset_name = futures[future]
+    dataset = future.result()
     dataset.generate_bids_ids(replace_existing=True)
     dataset.to_json()
+    dataset.generate_features(skip_unavailable=True)
+    dataset.generate_bids_ids(replace_existing=True)
+    dataset.to_json()
+    
+    
     # dataset_features = dataset.generate_features(features_conn)
-    dataset_features = dataset.generate_features(skip_unavailable=True)
+    # dataset_features = dataset.generate_features(skip_unavailable=True)
     # Merge the generated features into the all_series_features dict
     # all_series_features = {**all_series_features, **dataset_features}
     
