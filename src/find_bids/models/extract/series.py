@@ -225,21 +225,21 @@ def generate_token_ngrams(tokens: list[str]) -> set[str]:
     return token_set | bigrams | trigrams
 
 def initialize_features_db(db_path: UPath) -> sqlite3.Connection:
-    if not db_path.exists():
-        with sqlite3.connect(str(db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS series_features (
-                    subject_id TEXT NOT NULL,
-                    session_id TEXT,
-                    series_id TEXT NOT NULL,
-                    series_description TEXT NOT NULL,
-                    data JSON NOT NULL,
-                    PRIMARY KEY (subject_id, session_id, series_id, series_description)
-                )
-            """)
-            conn.commit()
-    return sqlite3.connect(str(db_path))
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS series_features (
+            subject_id TEXT NOT NULL,
+            session_id TEXT,
+            series_id TEXT NOT NULL,
+            series_description TEXT NOT NULL,
+            data JSON NOT NULL,
+            PRIMARY KEY (subject_id, session_id, series_id, series_description)
+        )
+    """)
+    conn.commit()
+    return conn
 
 class SeriesNumericFeature(BaseModel):
     value: Optional[float] # Robust central tendency measure (e.g. median)

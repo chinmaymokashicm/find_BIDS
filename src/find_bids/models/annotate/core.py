@@ -25,6 +25,7 @@ from upath import UPath
 
 def initialize_annotations_metrics_db(db_path: UPath) -> sqlite3.Connection:
     """Initialize the SQLite database for storing key metrics, for efficient querying when sampling for annotations."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
     cursor.execute("""
