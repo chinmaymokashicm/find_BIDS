@@ -23,8 +23,9 @@ from .suffix import score_suffix
 
 import os, json, re, math
 from enum import Enum
-from typing import Optional
-from pathlib import Path
+from typing import Optional, Self
+# from pathlib import Path
+from upath import UPath
 
 import pandas as pd
 from pydantic import BaseModel, model_validator
@@ -170,33 +171,127 @@ def score_is_derived(
 
     return {"derived": p_derived, "raw": p_raw}, label, confidence
 
-def infer_dataset_labels(datasets: list[Dataset], sample_subjects: Optional[int] = None) -> pd.DataFrame:
-    records = []
-    for dataset in datasets:
-        dataset_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = dataset.generate_features(skip_unavailable=True, sample_subjects=sample_subjects)
-        for subject_id, sessions in dataset_features.items():
-            for session_id, series_dict in sessions.items():
-                for series_id, series_features in series_dict.items():
-                    tokens = collect_tokens(series_features)
-                    _, inferred_datatype, datatype_confidence = score_datatype(series=series_features, tokens=tokens)
-                    _, inferred_suffix, suffix_confidence = score_suffix(series=series_features, tokens=tokens, datatype=inferred_datatype)
-                    _, is_derived, derived_confidence = score_is_derived(series=series_features, tokens=tokens)
-                    min_confidence = min(datatype_confidence, suffix_confidence, derived_confidence)
-                    series = dataset.search_series_by_id(subject_id, session_id, series_id)
-                    records.append({
-                        "series_dir_path": series.path if series else None,
-                        "dataset": dataset.dir_root.name,
-                        "subject_id": subject_id,
-                        "session_id": session_id,
-                        "series_id": series_id,
-                        "series_description": series_features.text.series_description.text if series_features.text and series_features.text.series_description else None,
-                        "inferred_datatype": inferred_datatype,
-                        "datatype_confidence": datatype_confidence,
-                        "inferred_suffix": inferred_suffix,
-                        "suffix_confidence": suffix_confidence,
-                        "is_derived": is_derived,
-                        "derived_confidence": derived_confidence,
-                        "label": f"{inferred_datatype}_{inferred_suffix}_{is_derived}",
-                        "min_confidence": min_confidence,
-                    })
-    return pd.DataFrame(records)
+class SeriesInference(BaseModel):
+    """Data class representing the inferred BIDS labels for a single series, along with confidence scores."""
+    subject_id: str
+    session_id: str
+    series_id: str
+    series_description: Optional[str]
+    inferred_datatype: Optional[str]
+    datatype_confidence: Optional[float]
+    inferred_suffix: Optional[str]
+    suffix_confidence: Optional[float]
+    is_derived: Optional[bool]
+    derived_confidence: Optional[float]
+    
+    @property
+    def label(self) -> str:
+        datatype = self.inferred_datatype if self.inferred_datatype else "unknown"
+        suffix = self.inferred_suffix if self.inferred_suffix else "unknown"
+        derived = "derived" if self.is_derived else ("raw" if self.is_derived == False else "unknown")
+        return f"{datatype}_{suffix}_{derived}"
+
+    @property
+    def min_confidence(self) -> Optional[float]:
+        confidences = [c for c in [self.datatype_confidence, self.suffix_confidence, self.derived_confidence] if c is not None]
+        if not confidences:
+            return None
+        return min(confidences)
+    
+class DatasetInference(BaseModel):
+    """Data class representing the inferred BIDS labels for all series within a dataset."""
+    dataset: str
+    series_inferences: list[SeriesInference]
+    
+    def to_dataframe(self) -> pd.DataFrame:
+        records = []
+        for si in self.series_inferences:
+            record = {
+                "dataset": self.dataset,
+                "subject_id": si.subject_id,
+                "session_id": si.session_id,
+                "series_id": si.series_id,
+                "series_description": si.series_description,
+                "inferred_datatype": si.inferred_datatype,
+                "datatype_confidence": si.datatype_confidence,
+                "inferred_suffix": si.inferred_suffix,
+                "suffix_confidence": si.suffix_confidence,
+                "is_derived": si.is_derived,
+                "derived_confidence": si.derived_confidence,
+                "label": si.label,
+                "min_confidence": si.min_confidence
+            }
+            records.append(record)
+        return pd.DataFrame(records)
+    
+class DatasetsInference(BaseModel):
+    """Data class representing the inferred BIDS labels for multiple datasets."""
+    datasets: list[DatasetInference]
+    
+    @classmethod
+    def from_csv(cls, csv_path: str) -> Self:
+        df = pd.read_csv(csv_path)
+        datasets = []
+        for dataset_name, group in df.groupby("dataset"):
+            series_inferences = []
+            for _, row in group.iterrows():
+                si = SeriesInference(
+                    subject_id=row["subject_id"],
+                    session_id=row["session_id"],
+                    series_id=row["series_id"],
+                    series_description=row.get("series_description"),
+                    inferred_datatype=row.get("inferred_datatype"),
+                    datatype_confidence=row.get("datatype_confidence"),
+                    inferred_suffix=row.get("inferred_suffix"),
+                    suffix_confidence=row.get("suffix_confidence"),
+                    is_derived=row.get("is_derived"),
+                    derived_confidence=row.get("derived_confidence")
+                )
+                series_inferences.append(si)
+            di = DatasetInference(dataset=str(dataset_name), series_inferences=series_inferences)
+            datasets.append(di)
+        return cls(datasets=datasets)
+    
+    @classmethod
+    def from_datasets(cls, datasets: list[Dataset], sample_subjects_per_subjects: Optional[int] = None) -> Self:
+        dataset_inferences = []
+        for dataset in datasets:
+            dataset_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = dataset.generate_features(skip_unavailable=True, sample_subjects=sample_subjects_per_subjects)
+            series_inferences: list[SeriesInference] = []
+            for subject_id, sessions in dataset_features.items():
+                for session_id, series_dict in sessions.items():
+                    for series_id, series_features in series_dict.items():
+                        tokens = collect_tokens(series_features)
+                        _, inferred_datatype, datatype_confidence = score_datatype(series=series_features, tokens=tokens)
+                        _, inferred_suffix, suffix_confidence = score_suffix(series=series_features, tokens=tokens, datatype=inferred_datatype)
+                        _, is_derived, derived_confidence = score_is_derived(series=series_features, tokens=tokens)
+                        min_confidence = min(datatype_confidence, suffix_confidence, derived_confidence)
+                        # series = dataset.search_series_by_id(subject_id, session_id, series_id)
+                        series_description = series_features.text.series_description.text if series_features.text and series_features.text.series_description else None
+                        record = {
+                            "dataset": dataset.dir_root.name,
+                            "subject_id": subject_id,
+                            "session_id": session_id,
+                            "series_id": series_id,
+                            "series_description": series_description,
+                            "inferred_datatype": inferred_datatype,
+                            "datatype_confidence": datatype_confidence,
+                            "inferred_suffix": inferred_suffix,
+                            "suffix_confidence": suffix_confidence,
+                            "is_derived": is_derived,
+                            "derived_confidence": derived_confidence,
+                            "min_confidence": min_confidence
+                        }
+                        series_inferences.append(SeriesInference(**record))
+            dataset_inference = DatasetInference(dataset=dataset.dir_root.name, series_inferences=series_inferences)
+            dataset_inferences.append(dataset_inference)
+        return cls(datasets=dataset_inferences)
+    
+    def to_dataframe(self) -> pd.DataFrame:
+        return pd.concat([di.to_dataframe() for di in self.datasets], ignore_index=True)
+    
+    def to_csv(self, csv_path: UPath | str) -> None:
+        if isinstance(csv_path, str):
+            csv_path = UPath(csv_path)
+        df = self.to_dataframe()
+        df.to_csv(csv_path, index=False) # type: ignore

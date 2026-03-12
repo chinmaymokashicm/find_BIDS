@@ -51,6 +51,7 @@ FUNC_KEYWORDS = {
 FMAP_KEYWORDS = {
     "fieldmap", "b0map", "topup",
     "sefm", "pepolar", "b1map", "tb1",
+    "fm", "magnitude", "phase"
 }
 
 ANAT_KEYWORDS = {

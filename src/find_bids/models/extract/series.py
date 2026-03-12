@@ -45,8 +45,8 @@ SNAKE_TO_CAMEL_CASE_PATTERN: re.Pattern = re.compile(r'(_)([a-z])')
 PASCAL_TO_SNAKE_CASE_PATTERN: re.Pattern = re.compile(r'(?<!^)(?=[A-Z])')
 SNAKE_TO_PASCAL_CASE_PATTERN: re.Pattern = re.compile(r'(_)([a-z])')
 
-# _TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9]+")
-_TOKEN_PATTERN = re.compile(r"[^a-zA-Z0-9_\-\s]")
+_TOKEN_PATTERN = re.compile(r"[a-zA-Z0-9]+")
+# _TOKEN_PATTERN = re.compile(r"[^a-zA-Z0-9_\-\s]")
 
 def indent_block(text: str, indent: int = 2) -> str:
     pad = " " * indent
@@ -233,7 +233,7 @@ def initialize_features_db(db_path: UPath) -> sqlite3.Connection:
                     subject_id TEXT NOT NULL,
                     session_id TEXT,
                     series_id TEXT NOT NULL,
-                    series_description TEXT,
+                    series_description TEXT NOT NULL,
                     data JSON NOT NULL,
                     PRIMARY KEY (subject_id, session_id, series_id, series_description)
                 )
@@ -300,7 +300,7 @@ class SeriesCategoricalFeature(BaseModel):
         This method computes the mode (most common category) and counts of each category while ignoring None values, and calculates the consistency of the mode category across the series to provide a summary of the categorical feature across a series of DICOM instances.
         """
         values_list = list(values)
-        valid_values = [v for v in values_list if v is not None]
+        valid_values = [v for v in values_list if v not in (None, "", [])]
         if not valid_values:
             return cls(value=None, category_counts={}, consistency=None)
         category_counts = {}
@@ -670,34 +670,6 @@ class DiffusionFeatures(BaseModel):
     
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
-        # datasets = list(datasets)
-
-        # volume_map = {}  # (bval, gradient) -> count
-        # has_diffusion_flags = []
-
-        # for ds in datasets:
-        #     b = get_tag_value(ds, "DiffusionBValue", None)
-        #     g = get_tag_value(ds, "DiffusionGradientDirection", None)
-
-        #     if b is None:
-        #         has_diffusion_flags.append(False)
-        #         continue
-
-        #     has_diffusion_flags.append(True)
-
-        #     b = float(b)
-        #     gradient = (
-        #         tuple(round(float(x), 5) for x in g)
-        #         if g is not None and len(g) == 3
-        #         else None
-        #     )
-
-        #     vol_key = (b, gradient)
-
-        #     volume_map.setdefault(vol_key, 0)
-        #     volume_map[vol_key] += 1
-
-        # has_diffusion = SeriesBooleanFeature.from_values(has_diffusion_flags)
         
         volume_map = {}
         
@@ -706,7 +678,7 @@ class DiffusionFeatures(BaseModel):
             
             if b is None: continue
             
-            gradient = tuple(round(float(x), 4) for x in g) if g else None
+            gradient = tuple(round(float(x), 4) for x in g.split()) if g else None
             vol_key = (b, gradient)
             volume_map[vol_key] = volume_map.get(vol_key, 0) + 1
 
@@ -917,7 +889,7 @@ class MultiEchoFeatures(BaseModel):
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
         echo_times_raw = [get_tag_value(ds, "EchoTime") for ds in datasets]
         # Round to 1 decimal place to handle micro-jitter
-        unique_echo_times = sorted({round(float(et), 1) for et in echo_times_raw if et is not None})
+        unique_echo_times = sorted({round(float(et), 1) for et in echo_times_raw if et not in (None, "", [])})
         
         echo_numbers_raw = [get_tag_value(ds, "EchoNumbers", None) for ds in datasets]
         echo_numbers_valid = []
@@ -979,16 +951,37 @@ class SpatialFeatures(BaseModel):
 
         pixel_spacing = None
         if any(hasattr(ds, "PixelSpacing") for ds in datasets):
-            try:
-                pixel_spacing_x = SeriesNumericFeature.from_values(
-                    get_tag_value(ds, "PixelSpacing", [None, None])[0] if hasattr(ds, "PixelSpacing") else None for ds in datasets # type: ignore
-                )
-                pixel_spacing_y = SeriesNumericFeature.from_values(
-                    get_tag_value(ds, "PixelSpacing", [None, None])[1] if hasattr(ds, "PixelSpacing") else None for ds in datasets # type: ignore
-                )
+            def _to_float_or_none(v):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            def _pixel_spacing_pair(ds):
+                if not hasattr(ds, "PixelSpacing"):
+                    return (None, None)
+
+                ps = get_tag_value(ds, "PixelSpacing", None)
+                if ps is None:
+                    return (None, None)
+
+                if isinstance(ps, str):
+                    ps = [p.strip() for p in ps.split("\\") if p.strip()]
+                elif isinstance(ps, MultiValue):
+                    ps = list(ps)
+                elif not isinstance(ps, (list, tuple)):
+                    return (None, None)
+
+                x = _to_float_or_none(ps[0]) if len(ps) > 0 else None
+                y = _to_float_or_none(ps[1]) if len(ps) > 1 else None
+                return (x, y)
+
+            pairs = [_pixel_spacing_pair(ds) for ds in datasets]
+            pixel_spacing_x = SeriesNumericFeature.from_values(x for x, _ in pairs)
+            pixel_spacing_y = SeriesNumericFeature.from_values(y for _, y in pairs)
+
+            if pixel_spacing_x.valid_fraction > 0 or pixel_spacing_y.valid_fraction > 0:
                 pixel_spacing = (pixel_spacing_x, pixel_spacing_y)
-            except TypeError:
-                pixel_spacing = None
 
         image_orientation = SeriesCategoricalFeature.from_values(
             get_tag_value(ds, "ImageOrientationPatient", None) for ds in datasets

@@ -118,6 +118,9 @@ def is_epi(series: SeriesFeatures) -> bool:
             score -= 3
         elif val == "GR":
             score -= 2
+            
+    if temp and temp.is_3D:
+        score -= 4  # EPI is almost always 2D
 
     # ---------------------------
     # ScanOptions (weak signal)

@@ -190,31 +190,63 @@ def score_derived(series: SeriesFeatures, tokens: set[str]) -> int:
 
     return score
 
-def score_dwi(series: SeriesFeatures, tokens: set[str]) -> int:
-    """
-    Score likelihood that a series belongs to the DWI datatype.
-
-    Steps:
-        1. Extract relevant features and tokens from the series
-        2. Apply physics-informed heuristics to assign points for diffusion-consistent features (e.g., high b-values, many diffusion directions, EPI pattern)
-        3. Apply penalties for features that are inconsistent with DWI (e.g., strong perfusion evidence, functional EPI pattern, anatomical naming without diffusion physics)
-        4. Aggregate the scores to produce a final likelihood estimate
-        5. Optionally convert the raw score to a probability using a softmax function across all datatypes (not implemented here, but could be done in the final classification step)
-        6. Return the final score (higher means more likely to be DWI)
-        
-    Note: This is a heuristic scoring system and may not perfectly classify all series, but it can help flag likely DWI series for further review or automatic labeling.
-    
-    Args:
-        series: SeriesFeatures object containing extracted features of the series
-        tokens: Set of text tokens extracted from the series metadata (e.g., SeriesDescription, SequenceName, etc.)
-    """
-
+def score_fmap(series: SeriesFeatures, tokens: set[str]) -> int:
     score = 0
 
-    # ============================================================
-    # 1. Extract commonly used signals
-    # ============================================================
+    imagetype = series.image_type
+    multiecho = series.multi_echo
+    temporal = series.temporal
+    spatial = series.spatial
+    
+    n_tp = temporal.num_timepoints if temporal else None
+    epi = is_epi(series)
+    is3d = bool(temporal and temporal.is_3D)
+    num_echoes = multiecho.num_echoes if multiecho else None
+    thickness = spatial.slice_thickness.value if (spatial and spatial.slice_thickness) else None
 
+    is_mag = bool(imagetype and imagetype.is_magnitude and imagetype.is_magnitude.value)
+    is_phase = bool(imagetype and imagetype.is_phase and imagetype.is_phase.value)
+
+    # ---------------------------------------------------------
+    # 1. THE RESOLUTION GATE
+    # ---------------------------------------------------------
+    # Fieldmaps are 2D; 3D volumes (like ME-MPRAGE) are anatomical.
+    if is3d:
+        score -= 20
+
+    # High-res isotropic scans are structural, not BIDS fieldmaps.
+    if thickness is not None and thickness < 1.5:
+        score -= 15
+
+    # ---------------------------------------------------------
+    # 2. POSITIVE EVIDENCE
+    # ---------------------------------------------------------
+    if tokens & FMAP_KEYWORDS:
+        score += 6
+
+    # Classic Magnitude/Phase pattern for fieldmaps
+    if n_tp is not None and n_tp <= 2:
+        if is_mag or is_phase:
+            score += 5
+
+    # Short EPI PE-polar fieldmaps (TOPUP)
+    if epi and n_tp is not None and 2 <= n_tp <= 6:
+        score += 3
+
+    # ---------------------------------------------------------
+    # 3. ANATOMICAL EXCLUSION
+    # ---------------------------------------------------------
+    # Multi-echo anatomical mapping (e.g. T2*)
+    if (tokens & ANAT_KEYWORDS) and num_echoes and num_echoes > 1:
+        score -= 15
+
+    if (tokens & ANAT_KEYWORDS) and not (tokens & FMAP_KEYWORDS):
+        score -= 10
+
+    return score
+
+def score_dwi(series: SeriesFeatures, tokens: set[str]) -> int:
+    score = 0
     diffusion = series.diffusion
     temporal = series.temporal
     imagetype = series.image_type
@@ -223,493 +255,146 @@ def score_dwi(series: SeriesFeatures, tokens: set[str]) -> int:
     n_tp = temporal.num_timepoints if temporal else None
     epi = is_epi(series)
 
-    # Diffusion physics
     bvals = diffusion.b_values if (diffusion and diffusion.b_values) else None
     num_dirs = diffusion.num_diffusion_directions if diffusion else None
     num_vols = diffusion.num_diffusion_volumes if diffusion else None
     num_b0 = diffusion.num_b0 if diffusion else None
 
-    has_diffusion_flag = bool(
-        diffusion and diffusion.has_diffusion and diffusion.has_diffusion.value
-    )
-
-    has_diffusion_imagetype = bool(
-        imagetype and imagetype.has_diffusion and imagetype.has_diffusion.value
-    )
-
-    # Derived diffusion maps
+    has_diffusion_flag = bool(diffusion and diffusion.has_diffusion and diffusion.has_diffusion.value)
+    has_diffusion_imagetype = bool(imagetype and imagetype.has_diffusion and imagetype.has_diffusion.value)
+    
     has_adc = bool(imagetype and imagetype.is_adc and imagetype.is_adc.value)
     has_fa = bool(imagetype and imagetype.is_fa and imagetype.is_fa.value)
     has_trace = bool(imagetype and imagetype.is_trace and imagetype.is_trace.value)
 
-    # Perfusion evidence (used for penalties)
     has_perfusion_flag = bool(
         (imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value)
-        or (perfusion and (
-            perfusion.perfusion_labeling_type
-            or perfusion.perfusion_series_type
-            or perfusion.contrast_agent
-        ))
+        or (perfusion and (perfusion.perfusion_labeling_type or perfusion.perfusion_series_type or perfusion.contrast_agent))
     )
 
-    # ============================================================
-    # 2. Strong diffusion physics evidence
-    # ============================================================
-
+    # ---------------------------------------------------------
+    # 1. PHYSICS
+    # ---------------------------------------------------------
     has_nonzero_bvals = bool(bvals and any(b > 50 for b in bvals))
-    has_high_bvals = bool(bvals and any(b >= 800 for b in bvals))
-    has_gradients = bool(num_dirs is not None and num_dirs >= 6)
+    if has_nonzero_bvals: score += 4
+    if bool(bvals and any(b >= 800 for b in bvals)): score += 2
+    if bool(num_dirs is not None and num_dirs >= 6): score += 4
+    if num_vols is not None and num_vols >= 20: score += 2
+    if num_b0 is not None and num_b0 >= 2: score += 1
 
-    if has_nonzero_bvals:
-        score += 4
-
-    if has_high_bvals:
-        score += 2
-
-    if has_gradients:
-        score += 4
-
-    if num_vols is not None and num_vols >= 20:
-        score += 2
-
-    if num_b0 is not None and num_b0 >= 2:
-        score += 1
-
-    # ============================================================
-    # 3. Typical diffusion acquisition pattern
-    # ============================================================
-
-    # DWI is typically EPI with multiple volumes
     if epi and n_tp is not None and n_tp > 1:
+        if n_tp >= 10: score += 1
+        if n_tp >= 20: score += 1
 
-        if n_tp >= 10:
-            score += 1
-
-        if n_tp >= 20:
-            score += 1
-
-    # ============================================================
-    # 4. Metadata / naming evidence
-    # ============================================================
-
-    # ImageType diffusion indicators
     if has_diffusion_flag or has_diffusion_imagetype:
         score += 3
 
-    # Text-based naming hints
+    # ---------------------------------------------------------
+    # 2. THE TEXTUAL FALLBACK (Fix for missing DWI)
+    # ---------------------------------------------------------
     if tokens & DIFFUSION_KEYWORDS:
-        score += 2
-
-    # ============================================================
-    # 5. Derived diffusion maps (ADC / FA / TRACE)
-    # ============================================================
+        score += 5  # Boosted significantly to catch missing b-value headers
+        if epi:
+            score += 5  # EPI + Diffusion name = Almost certainly DWI
 
     if has_adc or has_fa or has_trace:
-
-        # Weak evidence for diffusion datatype
-        score += 1
-
-        # Derived maps often single-volume
+        score += 2
         if n_tp is not None and n_tp <= 2:
             score += 1
 
-    # ============================================================
-    # 6. Mutual exclusion penalties
-    # ============================================================
-
-    # Perfusion evidence
-    if has_perfusion_flag:
-        score -= 4
-
-    if perfusion and perfusion.num_timepoints and perfusion.num_timepoints > 40:
-        score -= 2
-
-    # Functional pattern (EPI + long time-series + functional tokens)
-    if epi and n_tp is not None and n_tp > 50 and (tokens & FUNC_KEYWORDS):
-        score -= 4
-
-    # Anatomical naming without diffusion physics
-    if (tokens & ANAT_KEYWORDS) and not (
-        has_nonzero_bvals or has_gradients or has_diffusion_imagetype
-    ):
-        score -= 3
-
-    # Explicit perfusion ImageType
-    if imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value:
-        score -= 3
+    # ---------------------------------------------------------
+    # 3. EXCLUSIONS
+    # ---------------------------------------------------------
+    if has_perfusion_flag: score -= 4
+    if perfusion and perfusion.num_timepoints and perfusion.num_timepoints > 40: score -= 2
+    if epi and n_tp is not None and n_tp > 50 and (tokens & FUNC_KEYWORDS): score -= 4
+    if (tokens & ANAT_KEYWORDS) and not (has_nonzero_bvals or has_diffusion_imagetype or (tokens & DIFFUSION_KEYWORDS)): score -= 3
+    if imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value: score -= 3
 
     return score
 
+
 def score_perf(series: SeriesFeatures, tokens: set[str]) -> int:
-    """
-    Score likelihood that a series belongs to the PERF (perfusion) datatype.
-
-    The scoring logic considers multiple lines of evidence, including:
-    1. Explicit naming cues (e.g., "ASL", "CBF", "perfusion" in text tokens)
-    2. ImageType indicators (e.g., has_perfusion flag)
-    3. Typical acquisition patterns (e.g., long time-series, EPI pattern for DSC)
-    4. Mutual exclusion with other datatypes (e.g., strong diffusion evidence, functional EPI pattern, anatomical naming without perfusion cues)
-    5. Penalties for inconsistent features (e.g., strong diffusion physics, functional EPI pattern, anatomical naming without perfusion indicators)
-    
-    Args:
-        series: SeriesFeatures object containing extracted features of the series
-        tokens: Set of text tokens extracted from the series metadata (e.g., SeriesDescription, SequenceName, etc.)
-    """
-
     score = 0
-
-    # ============================================================
-    # 1. Extract commonly used signals
-    # ============================================================
-
     perf = series.perfusion
     temporal = series.temporal
     imagetype = series.image_type
-    diffusion = series.diffusion
-
     n_tp = temporal.num_timepoints if temporal else None
     epi = is_epi(series)
-
-    # Perfusion indicators
-    has_perfusion_imagetype = bool(
-        imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value
-    )
-
-    # Diffusion indicators (used for penalties)
-    has_diffusion_flag = bool(
-        diffusion and diffusion.has_diffusion and diffusion.has_diffusion.value
-    )
-
-    num_dirs = diffusion.num_diffusion_directions if diffusion else None
-
-    # ============================================================
-    # 2. Strong perfusion metadata evidence
-    # ============================================================
 
     if perf:
-        # ASL / labeling type (very strong perfusion signal)
-        if perf.perfusion_labeling_type and perf.perfusion_labeling_type.value:
-            score += 5
+        if perf.perfusion_labeling_type and perf.perfusion_labeling_type.value: score += 10
+        if n_tp is not None and 60 <= n_tp <= 120: score += 4
+        if perf.contrast_agent and perf.contrast_agent.value: score += 3
 
-        # Explicit perfusion series classification
-        if perf.perfusion_series_type and perf.perfusion_series_type.value:
-            score += 4
-
-        # Contrast bolus (typical for DSC / DCE)
-        if perf.contrast_agent and perf.contrast_agent.value:
-            score += 2
-
-        # Long perfusion time-series
-        if perf.num_timepoints and perf.num_timepoints > 40:
-            score += 2
-
-        # Regular temporal spacing (common in dynamic perfusion)
-        if perf.temporal_spacing and perf.temporal_spacing.value:
-            score += 1
-
-    # ImageType indicator
-    if has_perfusion_imagetype:
-        score += 4
-
-    # ============================================================
-    # 3. Typical perfusion acquisition pattern
-    # ============================================================
-
-    # Perfusion often appears as an EPI time-series
-    if epi and n_tp is not None:
-
-        if n_tp >= 30:
-            score += 1
-
-        if n_tp >= 50:
-            score += 1
-
-    # ============================================================
-    # 4. Naming / token evidence
-    # ============================================================
-
-    if tokens & PERFUSION_KEYWORDS:
-        score += 4
-
-        # EPI perfusion naming (e.g., ASL, DSC)
-        if epi:
-            score += 2
-
-    # ============================================================
-    # 5. Generic temporal evidence
-    # ============================================================
-
-    # Long time-series without strong functional tokens
-    if n_tp is not None and n_tp > 40 and not (tokens & FUNC_KEYWORDS):
-        score += 1
-
-    # ============================================================
-    # 6. Mutual exclusion penalties
-    # ============================================================
-
-    # Strong diffusion physics
-    if has_diffusion_flag:
-        score -= 4
-
-    if num_dirs and num_dirs >= 6:
-        score -= 2
-
-    # Functional BOLD pattern
-    if epi and n_tp is not None and n_tp > 50 and (tokens & FUNC_KEYWORDS):
-        score -= 3
-
-    # Anatomical naming without perfusion indicators
-    if (tokens & ANAT_KEYWORDS) and not (
-        tokens & PERFUSION_KEYWORDS
-        or has_perfusion_imagetype
-        or (perf and perf.perfusion_labeling_type)
-    ):
-        score -= 2
-
-    # Explicit diffusion ImageType
-    if imagetype and imagetype.has_diffusion and imagetype.has_diffusion.value:
-        score -= 2
-
-    return score
-
-def score_fmap(series: SeriesFeatures, tokens: set[str]) -> int:
-    """
-    Score likelihood that a series belongs to the FMAP (fieldmap) datatype.
-
-    The scoring logic considers multiple lines of evidence, including:
-    1. Explicit naming cues (e.g., "fieldmap", "fmap", "phase", "magnitude" in text tokens)
-    2. ImageType indicators (e.g., is_phase, is_magnitude)
-    3. Typical acquisition patterns (e.g., few timepoints, EPI-like for PE-polar fieldmaps)
-    4. Mutual exclusion with other datatypes (e.g., strong diffusion evidence, strong functional evidence, anatomical naming without fieldmap cues)
-    5. Multi-echo GRE patterns (common for fieldmaps but can be ME-MPRAGE, so consider anatomical tokens for context)
-    6. Penalties for inconsistent features (e.g., many timepoints, strong diffusion/perfusion evidence, functional EPI pattern)
-    
-    Args:
-        series: SeriesFeatures object containing extracted features of the series
-        tokens: Set of text tokens extracted from the series metadata (e.g., SeriesDescription, SequenceName, etc.)
-    """
-
-    score = 0
-
-    # ============================================================
-    # 1. Extract commonly used signals
-    # ============================================================
-
-    imagetype = series.image_type
-    multiecho = series.multi_echo
-    temporal = series.temporal
-    diffusion = series.diffusion
-    perfusion = series.perfusion
-
-    n_tp = temporal.num_timepoints if temporal else None
-    epi = is_epi(series)
-
-    num_echoes = multiecho.num_echoes if multiecho else None
-
-    # ImageType indicators
-    is_mag = bool(imagetype and imagetype.is_magnitude and imagetype.is_magnitude.value)
-    is_phase = bool(imagetype and imagetype.is_phase and imagetype.is_phase.value)
-    is_real = bool(imagetype and imagetype.is_real and imagetype.is_real.value)
-    is_imag = bool(imagetype and imagetype.is_imaginary and imagetype.is_imaginary.value)
-
-    # ============================================================
-    # 2. Explicit naming evidence
-    # ============================================================
-
-    if tokens & FMAP_KEYWORDS:
+    if imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value:
         score += 5
 
-    # ============================================================
-    # 3. Classic GRE phase/magnitude fieldmap pattern
-    # ============================================================
+    has_contrast = bool(series.contrast and series.contrast.contrast_agent and 
+                        series.contrast.contrast_agent.value and 
+                        len(series.contrast.contrast_agent.value) > 0)
 
-    # Fieldmaps are commonly exported as:
-    #   magnitude1 / magnitude2
-    #   phase
-    # with very few volumes.
+    # ---------------------------------------------------------
+    # 1. THE DCE FIX (Allow non-EPI contrast series to win)
+    # ---------------------------------------------------------
+    # DCE is usually NOT EPI. It's a 3D T1 sequence run many times.
+    if has_contrast and n_tp is not None and n_tp > 10:
+        score += 10
 
-    if n_tp is not None and n_tp <= 2:
+    if epi and (tokens & PERFUSION_KEYWORDS):
+        score += 6
 
-        if is_mag or is_phase:
-            score += 4
-
-        if is_real or is_imag:
-            score += 3
-
-    # ============================================================
-    # 4. Multi-echo GRE fieldmaps
-    # ============================================================
-
-    if num_echoes and num_echoes > 1:
-
-        # Multi-echo GRE is commonly used for fieldmap estimation
-        if not (tokens & ANAT_KEYWORDS):
-            score += 3
-        else:
-            # Could be ME-MPRAGE or other anatomical
-            score += 1
-
-    # ============================================================
-    # 5. EPI PE-polar fieldmaps (TOPUP / SEFM)
-    # ============================================================
-
-    # Often look like short EPI runs with 2–4 volumes
-    if epi and n_tp is not None and 2 <= n_tp <= 4:
-
-        if tokens & FMAP_KEYWORDS:
-            score += 3
-        else:
-            # Weak hint for PE-polar fieldmap
-            score += 1
-
-    # ============================================================
-    # 6. Mutual exclusion penalties
-    # ============================================================
-
-    # Many timepoints → unlikely to be fieldmap
-    if n_tp is not None and n_tp > 10:
-        score -= 3
-
-    # Strong diffusion evidence
-    if diffusion and (
-        (diffusion.has_diffusion and diffusion.has_diffusion.value)
-        or (diffusion.num_diffusion_directions and diffusion.num_diffusion_directions >= 6)
-    ):
-        score -= 4
-
-    # Strong perfusion evidence
-    if perfusion and (
-        (perfusion.perfusion_labeling_type and perfusion.perfusion_labeling_type.value)
-        or (perfusion.num_timepoints and perfusion.num_timepoints > 40)
-    ):
-        score -= 3
-
-    # Functional pattern (EPI + long time-series + functional tokens)
-    if epi and n_tp is not None and n_tp > 20 and (tokens & FUNC_KEYWORDS):
-        score -= 3
-
-    # Multi-echo anatomical sequences (e.g., ME-MPRAGE)
-    if (tokens & ANAT_KEYWORDS) and num_echoes and num_echoes > 1:
-        score -= 2
+    if (tokens & ANAT_KEYWORDS) and not (tokens & PERFUSION_KEYWORDS or perf or has_contrast):
+        score -= 5
 
     return score
 
-def score_func(series: SeriesFeatures, tokens: set[str]) -> int:
-    """Score for functional datatype."""
-    score = 0
 
+def score_func(series: SeriesFeatures, tokens: set[str]) -> int:
+    score = 0
     temporal = series.temporal
     encoding = series.encoding
-    imagetype = series.image_type
     diffusion = series.diffusion
     perfusion = series.perfusion
 
-    # --- Convenience aliases ---
     n_tp = temporal.num_timepoints if temporal else None
     epi = is_epi(series)
     tr_bucket = temporal.tr_bucket if temporal else None
+    is3d = bool(temporal and temporal.is_3D)
 
-    # Strong diffusion evidence
-    has_diffusion_flag = bool(
-        diffusion and diffusion.has_diffusion and diffusion.has_diffusion.value
-    )
+    if not epi: score -= 15
+    if n_tp is not None and n_tp <= 1: score -= 15
+    if is3d: score -= 8
 
-    # Strong perfusion evidence
-    has_perfusion_flag = bool(
-        perfusion and (
-            (perfusion.perfusion_labeling_type and perfusion.perfusion_labeling_type.value)
-            or (perfusion.num_timepoints and perfusion.num_timepoints > 40)
-        )
-    )
+    if tokens & FUNC_KEYWORDS: score += 5
 
-    # ---------------------------------------------------------
-    # STRONG POSITIVE EVIDENCE
-    # ---------------------------------------------------------
-
-    # Explicit functional keywords: bold, fmri, rest, task
-    if tokens & FUNC_KEYWORDS:
-        score += 5
-
-    # Canonical BOLD pattern: EPI + many timepoints
     if epi and n_tp is not None:
-        if n_tp >= 50:
-            score += 4
-        elif n_tp >= 20:
-            score += 3
-        elif n_tp >= 10:
-            score += 1
+        if n_tp >= 50: score += 4
+        elif n_tp >= 20: score += 3
+
+    if epi and tr_bucket in ("short", "medium"): score += 2
+
+    has_contrast = bool(series.contrast and series.contrast.contrast_agent and 
+                        series.contrast.contrast_agent.value and 
+                        len(series.contrast.contrast_agent.value) > 0)
+    
+    if has_contrast: score -= 20
+    if (tokens & ANAT_KEYWORDS) and (n_tp is None or n_tp < 10 or not epi): score -= 15
+    if diffusion and diffusion.has_diffusion and diffusion.has_diffusion.value: score -= 10
 
     # ---------------------------------------------------------
-    # MODERATE POSITIVE EVIDENCE
+    # 1. THE ASL FIX (Prevent ASL from dominating func)
     # ---------------------------------------------------------
-
-    # Short/medium TR typical for BOLD acquisitions
-    if epi and tr_bucket in ("short", "medium"):
-        score += 2
-
-    # ---------------------------------------------------------
-    # SUPPORTING ACQUISITION FEATURES
-    # ---------------------------------------------------------
-
-    if encoding:
-        # Multiband acceleration (very common in fMRI)
-        if (
-            encoding.multiband_factor
-            and encoding.multiband_factor.value
-            and encoding.multiband_factor.value > 1
-        ):
-            score += 1
-
-        # Parallel imaging
-        if (
-            encoding.parallel_reduction_factor_in_plane
-            and encoding.parallel_reduction_factor_in_plane.value
-        ):
-            score += 1
-
-    # Functional tokens without competing modality cues
-    if tokens & FUNC_KEYWORDS and not (
-        tokens & (ANAT_KEYWORDS | DIFFUSION_KEYWORDS | PERFUSION_KEYWORDS)
-    ):
-        score += 1
-
-    # ---------------------------------------------------------
-    # NEGATIVE / MODALITY EXCLUSION EVIDENCE
-    # ---------------------------------------------------------
-
-    # Very short EPI series → likely fieldmap or scout
-    if epi and n_tp is not None and n_tp < 10:
-        score -= 3
-
-    # Fieldmap naming cues
-    if tokens & FMAP_KEYWORDS:
-        score -= 2
-
-    # Strong diffusion physics
-    if has_diffusion_flag:
-        score -= 4
-
-    if diffusion and diffusion.num_diffusion_directions and diffusion.num_diffusion_directions >= 6:
-        score -= 2
-
-    # Strong perfusion indicators
-    if has_perfusion_flag:
-        score -= 3
-
-    # ---------------------------------------------------------
-    # ANATOMICAL CONFLICTS
-    # ---------------------------------------------------------
-
-    # Structural naming + few volumes + non-EPI
-    if (tokens & ANAT_KEYWORDS) and n_tp is not None and n_tp <= 3 and not epi:
-        score -= 3
+    if perfusion and perfusion.perfusion_labeling_type and perfusion.perfusion_labeling_type.value:
+        score -= 20
+    if tokens & PERFUSION_KEYWORDS:
+        score -= 15
 
     return score
 
-def score_anat(series: SeriesFeatures, tokens: set[str]) -> int:
-    """Score for anatomical datatype."""
-    score = 0
 
+def score_anat(series: SeriesFeatures, tokens: set[str]) -> int:
+    score = 0
     temporal = series.temporal
     spatial = series.spatial
     sequence = series.sequence
@@ -719,135 +404,53 @@ def score_anat(series: SeriesFeatures, tokens: set[str]) -> int:
     imagetype = series.image_type
     contrast = series.contrast
 
-    # --- Convenience aliases ---
     n_tp = temporal.num_timepoints if temporal else None
     epi = is_epi(series)
-
     is3d = bool(temporal and temporal.is_3D)
     is_iso = bool(temporal and temporal.is_isotropic)
-
     tr_bucket = temporal.tr_bucket if temporal else None
-
     thickness = spatial.slice_thickness.value if (spatial and spatial.slice_thickness) else None
-
     num_echoes = multiecho.num_echoes if multiecho else None
     is_multi_echo = bool(num_echoes and num_echoes > 1)
 
     has_mpr = bool(imagetype and imagetype.is_mpr and imagetype.is_mpr.value)
+    has_diffusion_flag = bool((imagetype and imagetype.has_diffusion and imagetype.has_diffusion.value) or (diffusion and diffusion.has_diffusion and diffusion.has_diffusion.value))
+    has_perfusion_flag = bool((imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value) or (perfusion and (perfusion.perfusion_labeling_type or perfusion.perfusion_series_type or perfusion.contrast_agent)))
+    has_contrast = bool(contrast and contrast.contrast_agent and contrast.contrast_agent.value and len(contrast.contrast_agent.value) > 0)
 
-    has_diffusion_flag = bool(
-        (imagetype and imagetype.has_diffusion and imagetype.has_diffusion.value)
-        or (diffusion and diffusion.has_diffusion and diffusion.has_diffusion.value)
-    )
+    if tokens & ANAT_KEYWORDS: score += 5
+    if has_mpr: score += 3
+    if n_tp is not None and n_tp <= 3 and not epi: score += 3
 
-    has_perfusion_flag = bool(
-        (imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value)
-        or (perfusion and (
-            perfusion.perfusion_labeling_type
-            or perfusion.perfusion_series_type
-            or perfusion.contrast_agent
-        ))
-    )
-
-    has_contrast = bool(
-        contrast and contrast.contrast_agent and contrast.contrast_agent.value
-    )
-
-    # ---------------------------------------------------------
-    # STRONG POSITIVE EVIDENCE
-    # ---------------------------------------------------------
-
-    # Classic anatomical keywords
-    if tokens & ANAT_KEYWORDS:
-        score += 5
-
-    # MPR/MPRAGE indicator
-    if has_mpr:
-        score += 3
-
-    # Few volumes and non-EPI → typical structural
-    if n_tp is not None and n_tp <= 3 and not epi:
-        score += 3
-
-    # ---------------------------------------------------------
-    # ACQUISITION STRUCTURE
-    # ---------------------------------------------------------
-
-    # 3D acquisition
-    if is3d or (
-        sequence
-        and sequence.mr_acquisition_type
-        and sequence.mr_acquisition_type.value
-        and str(sequence.mr_acquisition_type.value).lower() == "3d"
-    ):
-        score += 2
-
-    # Thin slices typical of high-resolution structural scans
+    if is3d or (sequence and sequence.mr_acquisition_type and sequence.mr_acquisition_type.value and str(sequence.mr_acquisition_type.value).lower() == "3d"): score += 2
     if thickness is not None:
-        if thickness < 1.5:
-            score += 2
-        elif thickness < 2.5:
-            score += 1
+        if thickness < 1.5: score += 2
+        elif thickness < 2.5: score += 1
+    if is_iso: score += 1
 
-    # Isotropic voxels
-    if is_iso:
-        score += 1
-
-    # ---------------------------------------------------------
-    # STRUCTURAL SCAN PATTERNS
-    # ---------------------------------------------------------
-
-    # Long TR + few volumes + non-EPI
-    if tr_bucket == "long" and not epi and n_tp is not None and n_tp <= 3:
-        score += 1
-
-    # Post-contrast structural scan
-    if has_contrast and not epi and n_tp is not None and n_tp <= 5:
-        score += 1
+    if tr_bucket == "long" and not epi and n_tp is not None and n_tp <= 3: score += 1
+    if has_contrast and not epi and n_tp is not None and n_tp <= 5: score += 1
+        
+    if n_tp in (None, 1) and is3d and not epi and not has_diffusion_flag and not has_perfusion_flag: score += 4
 
     # ---------------------------------------------------------
-    # NEGATIVE / MODALITY EXCLUSION
+    # 1. THE DCE FIX (Penalize contrast time-series)
     # ---------------------------------------------------------
+    # A standard post-contrast T1 has 1 volume. If it has 10+, it's a DCE perfusion scan.
+    if has_contrast and n_tp is not None and n_tp > 10:
+        score -= 20
 
-    # Strong diffusion evidence
-    if has_diffusion_flag:
-        score -= 4
+    if tokens & PERFUSION_KEYWORDS:
+        score -= 10
 
-    # Strong perfusion evidence
-    if has_perfusion_flag:
-        score -= 4
+    if has_diffusion_flag: score -= 4
+    if has_perfusion_flag: score -= 4
+    if perfusion and perfusion.num_timepoints and perfusion.num_timepoints > 40: score -= 2
+    if epi and n_tp is not None and n_tp > 10 and (tokens & FUNC_KEYWORDS): score -= 4
+    if n_tp is not None and n_tp > 10 and not is_multi_echo and not has_contrast: score -= 3
 
-    if perfusion and perfusion.num_timepoints and perfusion.num_timepoints > 40:
-        score -= 2
-
-    # Functional-like EPI time-series
-    if epi and n_tp is not None and n_tp > 10 and (tokens & FUNC_KEYWORDS):
-        score -= 4
-
-    # ---------------------------------------------------------
-    # GENERIC TIME-SERIES PENALTIES
-    # ---------------------------------------------------------
-
-    # Many timepoints but not multi-echo
-    if n_tp is not None and n_tp > 10 and not is_multi_echo:
-        score -= 3
-
-    # ---------------------------------------------------------
-    # LOW-QUALITY / LOCALIZER SIGNALS
-    # ---------------------------------------------------------
-
-    # Very thick slices without structural naming
-    if (
-        thickness is not None
-        and thickness > 5.0
-        and not (tokens & ANAT_KEYWORDS)
-        and not has_mpr
-    ):
-        score -= 2
-
-    # Explicit localizer flag
-    if imagetype and imagetype.is_localizer and imagetype.is_localizer.value:
-        score -= 5
+    if thickness is not None and thickness > 5.0 and not (tokens & ANAT_KEYWORDS) and not has_mpr: score -= 2
+    if imagetype and imagetype.is_localizer and imagetype.is_localizer.value: score -= 5
 
     return score
 

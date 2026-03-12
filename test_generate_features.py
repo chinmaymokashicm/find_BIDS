@@ -27,39 +27,7 @@ dataset_info: dict[str, dict] = {
     # Add more datasets as needed
 }
 db_path = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
-# features_conn = initialize_features_db(db_path)
-# annotations_db_path = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/annotations_metrics.db")
-# _ = initialize_annotations_metrics_db(db_path)
-
-# datasets = []
-# all_series_features = {}
-# futures = {}
-# for dataset_name, paths in dataset_info.items():
-#     with ThreadPoolExecutor() as executor:
-#         dir_root: UPath = paths["dicom_root"]
-#         features_root: UPath = paths["features_root"]
-#         subject_level: bool = paths["subject_level"]
-#         if subject_level:
-#             future = executor.submit(
-#                 Dataset.from_dir_with_subject_level,
-#                 dir_root=dir_root,
-#                 features_root=features_root,
-#                 dtype="DICOM",
-#                 session_subdir_path=paths["session_subdir_path"],
-#                 series_subdir_path=paths["series_subdir_path"]
-#             )
-#             print(f"Submitted task for {dataset_name} dataset with subject-level structure: {dir_root}")
-#         else:
-#             future = executor.submit(
-#                 Dataset.from_dir_without_subject_level,
-#                 dir_root=dir_root,
-#                 features_root=features_root,
-#                 dtype="DICOM",
-#                 session_subdir_path=paths["session_subdir_path"],
-#                 series_subdir_path=paths["series_subdir_path"]
-#             )
-#             print(f"Submitted task for {dataset_name} dataset with session-level structure: {dir_root}")
-#         dataset = future.result()
+conn = initialize_features_db(db_path)
 futures = {}
 with ThreadPoolExecutor() as executor:
     for dataset_name, paths in dataset_info.items():
@@ -85,37 +53,9 @@ with ThreadPoolExecutor() as executor:
 
 for future in as_completed(futures):
     dataset_name = futures[future]
-    dataset = future.result()
+    dataset: Dataset = future.result()
     dataset.generate_bids_ids(replace_existing=True)
     dataset.to_json()
-    dataset.generate_features(skip_unavailable=True)
+    dataset.generate_features(skip_unavailable=True, conn=conn)
     dataset.generate_bids_ids(replace_existing=True)
     dataset.to_json()
-    
-    
-    # dataset_features = dataset.generate_features(features_conn)
-    # dataset_features = dataset.generate_features(skip_unavailable=True)
-    # Merge the generated features into the all_series_features dict
-    # all_series_features = {**all_series_features, **dataset_features}
-    
-    # for subject in dataset.subjects or []:
-    #     for session in subject.sessions or []:
-    #         for series in session.series or []:
-    #             series_features_path = features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
-    #             series_features = SeriesFeatures.from_json(series_features_path)
-    #             if subject.subject_id not in all_series_features:
-    #                 all_series_features[subject.subject_id] = {}
-    #             if session.session_id not in all_series_features[subject.subject_id]:
-    #                 all_series_features[subject.subject_id][session.session_id] = {}
-    #             all_series_features[subject.subject_id][session.session_id][series.series_id] = series_features
-    
-    # dataset.export_all_features_to_table()
-    # datasets.append(dataset)
-    
-# Merge features tables from all datasets into a single table
-# merged_table_save_path = Path("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/all_features.csv")
-# datasets[0].merge_features_tables(datasets[1:], save_path=merged_table_save_path)
-
-# all_session_annotations = AllSessionsAnnotation.from_series_features(all_series_features)
-# all_session_annotations.export_annotation_metrics_to_sqlite(features_conn)
-# features_conn.close()
