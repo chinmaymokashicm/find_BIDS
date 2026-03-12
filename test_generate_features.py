@@ -59,3 +59,5 @@ for future in as_completed(futures):
     dataset.generate_features(skip_unavailable=True, conn=conn)
     dataset.generate_bids_ids(replace_existing=True)
     dataset.to_json()
+    
+conn.close()
