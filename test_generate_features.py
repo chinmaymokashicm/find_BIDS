@@ -8,6 +8,38 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 
 from rich.progress import track
 
+def process_dataset(dataset_name: str, paths: dict, db_path: UPath) -> str:
+    if paths["subject_level"]:
+        dataset = Dataset.from_dir_with_subject_level(
+            dir_root=paths["dicom_root"],
+            features_root=paths["features_root"],
+            dtype="DICOM",
+            session_subdir_path=paths["session_subdir_path"],
+            series_subdir_path=paths["series_subdir_path"]
+        )
+    else:
+        dataset = Dataset.from_dir_without_subject_level(
+            dir_root=paths["dicom_root"],
+            features_root=paths["features_root"],
+            dtype="DICOM",
+            session_subdir_path=paths["session_subdir_path"],
+            series_subdir_path=paths["series_subdir_path"]
+        )
+
+    dataset.generate_bids_ids(replace_existing=True)
+    dataset.to_json()
+
+    # Use a thread-local SQLite connection to avoid cross-thread connection usage.
+    conn = initialize_features_db(db_path)
+    try:
+        dataset.generate_features(skip_unavailable=True, conn=conn)
+    finally:
+        conn.close()
+
+    dataset.generate_bids_ids(replace_existing=True)
+    dataset.to_json()
+    return dataset_name
+
 # Generate features for multiple datasets and merge into a single table
 dataset_info: dict[str, dict] = {
     "PROACTIVE": {
@@ -27,37 +59,17 @@ dataset_info: dict[str, dict] = {
     # Add more datasets as needed
 }
 db_path = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
+
+# Initialize DB schema once before parallel workers start.
 conn = initialize_features_db(db_path)
+conn.close()
+
 futures = {}
 with ThreadPoolExecutor() as executor:
     for dataset_name, paths in dataset_info.items():
-        if paths["subject_level"]:
-            future = executor.submit(
-                Dataset.from_dir_with_subject_level,
-                dir_root=paths["dicom_root"],
-                features_root=paths["features_root"],
-                dtype="DICOM",
-                session_subdir_path=paths["session_subdir_path"],
-                series_subdir_path=paths["series_subdir_path"]
-            )
-        else:
-            future = executor.submit(
-                Dataset.from_dir_without_subject_level,
-                dir_root=paths["dicom_root"],
-                features_root=paths["features_root"],
-                dtype="DICOM",
-                session_subdir_path=paths["session_subdir_path"],
-                series_subdir_path=paths["series_subdir_path"]
-            )
+        future = executor.submit(process_dataset, dataset_name, paths, db_path)
         futures[future] = dataset_name
 
 for future in as_completed(futures):
     dataset_name = futures[future]
-    dataset: Dataset = future.result()
-    dataset.generate_bids_ids(replace_existing=True)
-    dataset.to_json()
-    dataset.generate_features(skip_unavailable=True, conn=conn)
-    dataset.generate_bids_ids(replace_existing=True)
-    dataset.to_json()
-    
-conn.close()
+    future.result()
