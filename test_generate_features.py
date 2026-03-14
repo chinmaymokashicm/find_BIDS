@@ -4,11 +4,12 @@ from src.find_bids.models.annotate.core import initialize_annotations_metrics_db
 
 # from pathlib import Path
 from upath import UPath
+from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 from rich.progress import track
 
-def process_dataset(dataset_name: str, paths: dict, db_path: UPath) -> str:
+def process_dataset(dataset_name: str, paths: dict, db_path: Optional[UPath] = None) -> str:
     if paths["subject_level"]:
         dataset = Dataset.from_dir_with_subject_level(
             dir_root=paths["dicom_root"],
@@ -30,11 +31,11 @@ def process_dataset(dataset_name: str, paths: dict, db_path: UPath) -> str:
     dataset.to_json()
 
     # Use a thread-local SQLite connection to avoid cross-thread connection usage.
-    conn = initialize_features_db(db_path)
+    # conn = initialize_features_db(db_path)
     try:
-        dataset.generate_features(skip_unavailable=True, conn=conn)
+        dataset.generate_features(skip_unavailable=True, conn=None)
     finally:
-        conn.close()
+        pass
 
     dataset.generate_bids_ids(replace_existing=True)
     dataset.to_json()
@@ -58,16 +59,17 @@ dataset_info: dict[str, dict] = {
     },
     # Add more datasets as needed
 }
-db_path = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
+# db_path = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
 
 # Initialize DB schema once before parallel workers start.
-conn = initialize_features_db(db_path)
-conn.close()
+# conn = initialize_features_db(db_path)
+# conn.close()
 
 futures = {}
 with ThreadPoolExecutor() as executor:
     for dataset_name, paths in dataset_info.items():
-        future = executor.submit(process_dataset, dataset_name, paths, db_path)
+        # future = executor.submit(process_dataset, dataset_name, paths, db_path)
+        future = executor.submit(process_dataset, dataset_name, paths)
         futures[future] = dataset_name
 
 for future in as_completed(futures):
