@@ -162,12 +162,11 @@ def parse_dicom_datetime(datetime_str: Optional[str]) -> Optional[Any]:
     except Exception:
         return None
 
-def parse_dicom_date_time(date_str: Optional[str], time_str: Optional[str]) -> Optional[Any]:
+def parse_dicom_date_time(date_str: Optional[str], time_str: Optional[str]) -> Optional[datetime]:
     """Parse DICOM date (YYYYMMDD) and time (HHMMSS.FFFFFF) strings into a datetime object"""
     if date_str is None or time_str is None:
         return None
     try:
-        from datetime import datetime
         # Remove fractional seconds if present
         if "." in time_str:
             time_str = time_str.split(".")[0]
@@ -224,7 +223,14 @@ def generate_token_ngrams(tokens: list[str]) -> set[str]:
 
     return token_set | bigrams | trigrams
 
-def initialize_features_db(db_path: UPath) -> sqlite3.Connection:
+def initialize_features_db(db_path: UPath | str) -> sqlite3.Connection:
+    if isinstance(db_path, str):
+        db_path = UPath(db_path)
+    if db_path.protocol not in ("", "file"):
+        raise ValueError(
+            f"SQLite requires a local filesystem path, but got a remote path: {db_path!r}. "
+            "Run this code directly on the server, or use the local FEATURES_DB_PATH constant."
+        )
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
@@ -422,23 +428,39 @@ class GeometryFeatures(BaseModel):
         dx = dy = dz = None
         if rows.value and columns.value:
             for ds in datasets:
-                if hasattr(ds, "PixelSpacing") and hasattr(ds, "SliceThickness"):
-                    ps = get_tag_value(ds, "PixelSpacing", [None, None])
-                    st = get_tag_value(ds, "SliceThickness", None)
-                    if ps and isinstance(ps, (list, tuple)) and len(ps) == 2 and st:
-                        try:
-                            dx_candidate = float(ps[0])
-                            dy_candidate = float(ps[1])
-                            dz_candidate = float(st)
-                            if dx_candidate > 0 and dy_candidate > 0 and dz_candidate > 0:
-                                dx = dx_candidate
-                                dy = dy_candidate
-                                dz = dz_candidate
-                                break
-                        except (ValueError, TypeError):
-                            continue
+                ps = get_tag_value(ds, "PixelSpacing", None)
+                st = get_tag_value(ds, "SliceThickness", None)
 
-        voxel_size = (dx, dy, dz) if dx and dy and dz else None
+                if ps is None or st in (None, ""):
+                    continue
+
+                if isinstance(ps, str):
+                    ps_values = [p.strip() for p in ps.split("\\") if p.strip()]
+                elif isinstance(ps, MultiValue):
+                    ps_values = list(ps)
+                elif isinstance(ps, (list, tuple)):
+                    ps_values = list(ps)
+                else:
+                    continue
+
+                if len(ps_values) < 2:
+                    continue
+
+                try:
+                    dx_candidate = float(ps_values[0])
+                    dy_candidate = float(ps_values[1])
+                    dz_candidate = float(st)
+                    if dx_candidate > 0 and dy_candidate > 0 and dz_candidate > 0:
+                        dx = dx_candidate
+                        dy = dy_candidate
+                        dz = dz_candidate
+                        break
+                except (ValueError, TypeError):
+                    continue
+
+        voxel_size = None
+        if dx is not None and dy is not None and dz is not None:
+            voxel_size = (dx, dy, dz)
         matrix_size = (
             int(rows.value),
             int(columns.value),
@@ -1417,7 +1439,7 @@ class TextualMetadataFeatures(BaseModel):
 
 class AcquisitionFeatures(BaseModel):
     acquisition_time: Optional[SeriesNumericFeature] = None
-    series_time: Optional[SeriesNumericFeature] = None
+    series_time: Optional[datetime] = None
     acquisition_order: Optional[float] = None  # POSIX timestamp
 
     def __str__(self) -> str:
@@ -1489,22 +1511,41 @@ class AcquisitionFeatures(BaseModel):
         ]
         acq_feature = SeriesNumericFeature.from_values(acq_times)
 
-        series_times = [
-            parse_dicom_time(get_tag_value(ds, "SeriesTime", None))
-            for ds in datasets
-        ]
-        series_feature = SeriesNumericFeature.from_values(series_times)
+        series_datetimes = []
+        for ds in datasets:
+            series_time_raw = get_tag_value(ds, "SeriesTime", None)
+            if not series_time_raw:
+                continue
+
+            series_date_raw = get_tag_value(ds, "SeriesDate", None)
+            if not series_date_raw:
+                series_date_raw = (
+                    get_tag_value(ds, "AcquisitionDate", None)
+                    or get_tag_value(ds, "StudyDate", None)
+                )
+
+            if not series_date_raw:
+                continue
+
+            parsed_series_dt = parse_dicom_date_time(series_date_raw, series_time_raw)
+            if parsed_series_dt:
+                series_datetimes.append(parsed_series_dt)
+
+        series_time = None
+        if series_datetimes:
+            sorted_series_datetimes = sorted(series_datetimes)
+            series_time = sorted_series_datetimes[len(sorted_series_datetimes) // 2]
 
         return cls(
             acquisition_time=acq_feature,
-            series_time=series_feature,
+            series_time=series_time,
             acquisition_order=acquisition_order,
         )
     
-    def flatten(self) -> dict[str, Optional[float]]:
+    def flatten(self) -> dict[str, Optional[float | str]]:
         return {
             "acquisition_time": self.acquisition_time.value if self.acquisition_time else None,
-            "series_time": self.series_time.value if self.series_time else None,
+            "series_time": self.series_time.isoformat() if self.series_time else None,
             "acquisition_order": self.acquisition_order,
         }
     

@@ -472,11 +472,6 @@ def score_datatype(
     confidence : float
         Margin between top two candidate probabilities
     """
-
-    # ---------------------------------------------------------
-    # RAW SCORE COMPUTATION
-    # ---------------------------------------------------------
-
     raw_scores = {
         Datatype.ANAT.value: float(score_anat(series, tokens)),
         Datatype.FUNC.value: float(score_func(series, tokens)),
@@ -485,51 +480,24 @@ def score_datatype(
         Datatype.FMAP.value: float(score_fmap(series, tokens)),
         # Datatype.EXCLUDE.value: float(score_exclude(series, tokens)),
     }
+    
+    # # Determine softmax temperature based on number of datatypes (more datatypes -> higher temperature for softer probabilities)
+    # n_valid_datatypes = len(raw_scores)
+    # temperature = 1.0 + (n_valid_datatypes - 2) * 0.5  # Base temp of 1.0, add 0.5 for each datatype beyond 2
 
-    # ---------------------------------------------------------
-    # PROBABILITY CALIBRATION
-    # ---------------------------------------------------------
-
+    # probs = softmax(raw_scores, temperature=temperature)
     probs = softmax(raw_scores)
+    if not probs:
+        return {}, "unknown", 0.0
 
-    # Remove excluded datatype if present
-    candidate_probs = {
-        k: v for k, v in probs.items()
-        if k != Datatype.EXCLUDE.value
-    }
+    best_datatype = max(probs, key=lambda k: probs[k])
 
-    # Renormalize candidate probabilities
-    total = sum(candidate_probs.values())
-    if total == 0:
-        return probs, Datatype.UNKNOWN.value, 0.0
-
-    candidate_probs = {
-        k: v / total
-        for k, v in candidate_probs.items()
-    }
-
-    # ---------------------------------------------------------
-    # SELECT BEST DATATYPE
-    # ---------------------------------------------------------
-
-    best_type = max(candidate_probs, key=lambda k: candidate_probs[k])
-    best_prob = candidate_probs[best_type]
-
-    # ---------------------------------------------------------
-    # CONFIDENCE ESTIMATION
-    # ---------------------------------------------------------
-
-    sorted_probs = sorted(candidate_probs.values(), reverse=True)
-
-    if len(sorted_probs) > 1:
-        margin = sorted_probs[0] - sorted_probs[1]
+    sorted_probs = sorted(probs.values(), reverse=True)
+    margin = sorted_probs[0] - sorted_probs[1] if len(sorted_probs) > 1 else sorted_probs[0]
+    if margin < 0.2:
+        best_datatype = "unknown"
+        confidence = 0.0
     else:
-        margin = sorted_probs[0]
+        confidence = margin
 
-    # Low evidence safeguard
-    if best_prob < 0.40:
-        return probs, Datatype.UNKNOWN.value, 0.0
-
-    confidence = margin
-
-    return probs, best_type, confidence
+    return probs, best_datatype, confidence

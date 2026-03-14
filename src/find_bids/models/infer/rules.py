@@ -69,71 +69,83 @@ B0_KEYWORDS = {
     "b0", "b0map", "b0 map", "b0ref", "b0 ref", "b0reference", "b0 reference", "reference"
 }
 
-# ===== ANATOMICAL SUFFIX KEYWORDS =====
+# # ===== ANATOMICAL SUFFIX KEYWORDS =====
 
-T1_KEYWORDS = {
-    "t1", "t1w",
-    "mpr", "mprage", "mp-rage",
-    "spgr", "fspgr",
-    "bravo",            # GE
-    "tfl",              # Siemens turbo flash
-    "gre",              # sometimes used for T1 GRE
-    "ir", "irprep",     # inversion recovery
-    "t1c", "t1ce", "post", "postcontrast", "postgad",
-}
+# T1_KEYWORDS = {
+#     "t1", "t1w",
+#     "mpr", "mprage", "mp-rage",
+#     "spgr", "fspgr",
+#     "bravo",            # GE
+#     "tfl",              # Siemens turbo flash
+#     "gre",              # sometimes used for T1 GRE
+#     "ir", "irprep",     # inversion recovery
+#     "t1c", "t1ce", "post", "postcontrast", "postgad",
+# }
 
-T2_KEYWORDS = {
-    "t2", "t2w",
-    "tse", "fse", "fastspin", "fastspinecho",
-    "turbo", "turboecho",
-    "space",            # Siemens 3D T2
-    "cube",             # GE 3D T2
-    "vista",            # Philips 3D T2
-}
+# T2_KEYWORDS = {
+#     "t2", "t2w",
+#     "tse", "fse", "fastspin", "fastspinecho",
+#     "turbo", "turboecho",
+#     "space",            # Siemens 3D T2
+#     "cube",             # GE 3D T2
+#     "vista",            # Philips 3D T2
+# }
 
-FLAIR_KEYWORDS = {
-    "flair",
-    "t2flair",
-    "darkfluid",
-    "fluidattenuated",
-    "fluid-attenuated",
-    "tirm",             # turbo inversion recovery magnitude
-}
+# FLAIR_KEYWORDS = {
+#     "flair",
+#     "t2flair",
+#     "darkfluid",
+#     "fluidattenuated",
+#     "fluid-attenuated",
+#     "tirm",             # turbo inversion recovery magnitude
+# }
 
-PD_KEYWORDS = {
-    "pd", "pdw",
-    "protondensity",
-    "proton-density",
-}
+# PD_KEYWORDS = {
+#     "pd", "pdw",
+#     "protondensity",
+#     "proton-density",
+# }
 
-SWI_KEYWORDS = {
-    "swi",
-    "susceptibility",
-}
+# SWI_KEYWORDS = {
+#     "swi",
+#     "susceptibility",
+# }
 
-T2STAR_KEYWORDS = {
-    "t2star", "t2*", "t2_star", "t2starw"
-}
+# T2STAR_KEYWORDS = {
+#     "t2star", "t2*", "t2_star", "t2starw"
+# }
 
-T1MAP_KEYWORDS = {"t1map", "t1 map", "t1 mapping", "t1-map"}
-T2MAP_KEYWORDS = {"t2map", "t2 map", "t2 mapping", "t2-map"}
+# T1MAP_KEYWORDS = {"t1map", "t1 map", "t1 mapping", "t1-map"}
+# T2MAP_KEYWORDS = {"t2map", "t2 map", "t2 mapping", "t2-map"}
 
-# Other anatomical contrasts (not mutually exclusive with T1/T2/FLAIR)
-GRE_KEYWORDS = {
-    "gre",
-    "gradient",
-    "gradientecho",
-}
+# # Other anatomical contrasts (not mutually exclusive with T1/T2/FLAIR)
+# GRE_KEYWORDS = {
+#     "gre",
+#     "gradient",
+#     "gradientecho",
+# }
 
-# ===== FUNCTIONAL SUFFIX KEYWORDS =====
-BOLD_KEYWORDS = {
-    "bold", "fmri", "rest", "rsfmri", "resting", "task",
-    # "motor", "nback", "stroop", "language", "gambling",
-    # "sent", "cat", "lett", "tongue", "hands", "bhands",  # Task-specific
-}
+# # ===== FUNCTIONAL SUFFIX KEYWORDS =====
+# BOLD_KEYWORDS = {
+#     "bold", "fmri", "rest", "rsfmri", "resting", "task",
+#     # "motor", "nback", "stroop", "language", "gambling",
+#     # "sent", "cat", "lett", "tongue", "hands", "bhands",  # Task-specific
+# }
 
-SBREF_KEYWORDS = {
-    "sbref", "singlebandref", "sbrefep2d",
-    "singlebandreference", "sbrefepi", "sbrefep2d", "sbref_epi",
-    "single band reference", "sbref epi", "sbref ep2d",
-}
+# SBREF_KEYWORDS = {
+#     "sbref", "singlebandref", "sbrefep2d",
+#     "singlebandreference", "sbrefepi", "sbrefep2d", "sbref_epi",
+#     "single band reference", "sbref epi", "sbref ep2d",
+# }
+
+T1_KEYWORDS = {"t1", "t1w", "mpr", "mprage", "spgr", "fspgr", "bravo", "tfl", "t1c", "t1ce", "post", "postcontrast", "postgad"}
+T2_KEYWORDS = {"t2", "t2w", "tse", "fse", "fastspin", "fastspinecho", "turbo", "turboecho", "space", "cube", "vista"}
+FLAIR_KEYWORDS = {"flair", "t2flair", "darkfluid", "fluidattenuated", "tirm"}
+PD_KEYWORDS = {"pd", "pdw", "protondensity"}
+SWI_KEYWORDS = {"swi", "susceptibility"}
+T2STAR_KEYWORDS = {"t2star", "t2starw"}
+T1MAP_KEYWORDS = {"t1map"}
+T2MAP_KEYWORDS = {"t2map"}
+GRE_KEYWORDS = {"gre", "gradient", "gradientecho"}
+BOLD_KEYWORDS = {"bold", "fmri", "rest", "rsfmri", "resting", "task"}
+SBREF_KEYWORDS = {"sbref", "singlebandref", "sbrefep2d", "sbrefepi"}

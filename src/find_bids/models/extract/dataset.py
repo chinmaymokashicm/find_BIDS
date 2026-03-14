@@ -311,6 +311,12 @@ class Dataset(BaseModel):
                     if series.series_id in all_features[subject.subject_id][session.session_id]:
                         continue
                     features_save_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
+                    if conn is not None:
+                        # Check if features for this series already exist in the database
+                        existing_features = SeriesFeatures.from_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id, series_id=series.series_id)
+                        if existing_features is not None:
+                            all_features[subject.subject_id][session.session_id][series.series_id] = existing_features[0]
+                            continue
                     if not features_save_path.exists():
                         try:
                             features = SeriesFeatures.from_dicom_series(series.path)
@@ -397,12 +403,12 @@ class Dataset(BaseModel):
         if not save_path.parent.exists():
             save_path.parent.mkdir(parents=True, exist_ok=True)
         # Add column for dataset identifier to each dataset's features table
-        df = pd.read_csv(str(self.csv_export_path), low_memory=False)
-        df["root_data"] = str(self.dir_root)
-        df["features_data"] = str(self.features_root)
+        df = pd.read_csv(self.csv_export_path, low_memory=False) # type: ignore
+        df["dataset"] = self.dir_root.name
+        # df["features_data"] = str(self.features_root)
         for other_ds in other_datasets:
-            other_df = pd.read_csv(str(other_ds.csv_export_path), low_memory=False)
-            other_df["root_data"] = str(other_ds.dir_root)
-            other_df["features_data"] = str(other_ds.features_root)
+            other_df = pd.read_csv(other_ds.csv_export_path, low_memory=False) # type: ignore
+            other_df["dataset"] = other_ds.dir_root.name
+            # other_df["features_data"] = str(other_ds.features_root)
             df = pd.concat([df, other_df], ignore_index=True)
-        df.to_csv(str(save_path), index=False)
+        df.to_csv(save_path, index=False) # type: ignore

@@ -26,6 +26,8 @@ from enum import Enum
 from typing import Optional, Self
 # from pathlib import Path
 from upath import UPath
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 import pandas as pd
 from pydantic import BaseModel, model_validator
@@ -253,10 +255,14 @@ class DatasetsInference(BaseModel):
         return cls(datasets=datasets)
     
     @classmethod
-    def from_datasets(cls, datasets: list[Dataset], sample_subjects_per_subjects: Optional[int] = None) -> Self:
+    def from_datasets(cls, datasets: list[Dataset], sample_subjects_per_subjects: Optional[int] = None, conn: Optional[sqlite3.Connection] = None) -> Self:
         dataset_inferences = []
         for dataset in datasets:
-            dataset_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = dataset.generate_features(skip_unavailable=True, sample_subjects=sample_subjects_per_subjects)
+            dataset_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = dataset.generate_features(
+                conn=conn,
+                skip_unavailable=True,
+                sample_subjects=sample_subjects_per_subjects
+                )
             series_inferences: list[SeriesInference] = []
             for subject_id, sessions in dataset_features.items():
                 for session_id, series_dict in sessions.items():
