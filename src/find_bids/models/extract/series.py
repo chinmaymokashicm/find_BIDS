@@ -1516,19 +1516,51 @@ class AcquisitionFeatures(BaseModel):
         ]
         acq_feature = SeriesNumericFeature.from_values(acq_times)
 
-        date_tags = [0x00211060, 0x0019109D, "AcquisitionDateTime", "AcquisitionDate", "StudyDate", "SeriesDate"]
+        # date_tags = [0x00211060, 0x0019109D, "AcquisitionDateTime", "AcquisitionDate", "StudyDate", "SeriesDate"]
+        # series_time = None
+        # for ds in datasets:
+        #     for tag in date_tags:
+        #         datetime_str = get_tag_value(ds, tag, None)
+        #         if datetime_str:
+        #             if isinstance(datetime_str, dicom.DataElement):
+        #                 datetime_str = datetime_str.value
+        #             series_time = parse_dicom_datetime(datetime_str)
+        #             if series_time:
+        #                 break
+        
+        # 1. Try combined DateTime tags first (Most precise)
+        datetime_tags = ["AcquisitionDateTime", 0x0019109D, 0x00211060]
+
+        # 2. Try specific Time tags (Requires SeriesDate/StudyDate to be safe)
+        time_tags = ["AcquisitionTime", "SeriesTime", "ContentTime"]
+
         series_time = None
+        def get_best_timestamp(ds):
+            # Get a date anchor (SeriesDate is better than StudyDate)
+            date_val = ds.get("SeriesDate") or ds.get("StudyDate")
+            
+            # Check for combined DT tags
+            for tag in datetime_tags:
+                val = ds.get(tag)
+                if val:
+                    if isinstance(val, dicom.DataElement):
+                        val = val.value
+                    return parse_dicom_datetime(val)
+                
+            # Check for Time tags and combine with the date anchor
+            for tag in time_tags:
+                time_val = ds.get(tag)
+                if time_val and date_val:
+                    # Combine YYYYMMDD + HHMMSS
+                    return parse_dicom_datetime(f"{date_val}{time_val}")
+                    
+            return None
+        
         for ds in datasets:
-            for tag in date_tags:
-                datetime_str = get_tag_value(ds, tag, None)
-                if datetime_str:
-                    if isinstance(datetime_str, dicom.DataElement):
-                        datetime_str = datetime_str.value
-                    series_time = parse_dicom_datetime(datetime_str)
-                    print(f"Extracted series time from tag {tag}: {series_time.isoformat() if series_time else 'None'}")
-                    if series_time:
-                        print(f"Using series time from tag {tag} for acquisition order calculation: {series_time.isoformat()}")
-                        break
+            timestamp = get_best_timestamp(ds)
+            if timestamp:
+                series_time = timestamp
+                break
 
         return cls(
             acquisition_time=acq_feature,
