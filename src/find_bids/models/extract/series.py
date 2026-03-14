@@ -1407,8 +1407,8 @@ class ImageTypeFeature(BaseModel):
             "is_projection": self.is_projection.value if self.is_projection else None,
             "is_reformatted": self.is_reformatted.value if self.is_reformatted else None,
             "has_angio": self.has_angio.value if self.has_angio else None,
-            "has_diffusion": self.has_diffusion.value if self.has_diffusion else None,
-            "has_perfusion": self.has_perfusion.value if self.has_perfusion else None,
+            "has_diffusion_token": self.has_diffusion.value if self.has_diffusion else None,
+            "has_perfusion_token": self.has_perfusion.value if self.has_perfusion else None,
             "is_adc": self.is_adc.value if self.is_adc else None,
             "is_fa": self.is_fa.value if self.is_fa else None,
             "is_trace": self.is_trace.value if self.is_trace else None,
@@ -1614,11 +1614,12 @@ class AcquisitionFeatures(BaseModel):
             "acquisition_time": self.acquisition_time.value if self.acquisition_time else None,
             "series_time": self.series_time.isoformat() if self.series_time else None,
             "acquisition_order": self.acquisition_order,
+            "source_image_sequences": self.source_image_sequences.value if self.source_image_sequences else None,
         }
     
     @staticmethod
     def get_column_headers(prefix: str = "") -> list[str]:
-        headers = ["acquisition_time", "series_time", "acquisition_order"]
+        headers = ["acquisition_time", "series_time", "acquisition_order", "source_image_sequences"]
         return [f"{prefix}_{h}" if prefix else h for h in headers]
 
 class SeriesFeatures(BaseModel):
@@ -1957,27 +1958,27 @@ ON CONFLICT(subject_id, session_id, series_id, series_description) DO UPDATE SET
         conn.execute(insert_query, (subject_id, session_id, self.series_uid, series_description, json.dumps(self.model_dump())))
         conn.commit()
         
-    def is_derived_from(self, other: Self) -> bool:
-        """Determine if this series is likely derived from another series based on metadata features"""
-        # Check for matching UIDs (exact match means same series)
-        if self.series_uid == other.series_uid:
-            return False  # Same series, not derived
+    # def is_derived_from(self, other: Self) -> bool:
+    #     """Determine if this series is likely derived from another series based on metadata features"""
+    #     # Check for matching UIDs (exact match means same series)
+    #     if self.series_uid == other.series_uid:
+    #         return False  # Same series, not derived
         
-        # Check for shared StudyInstanceUID (must be the same study to be derived)
-        if self.study_uid != other.study_uid:
-            return False  # Different studies, cannot be derived
+    #     # Check for shared StudyInstanceUID (must be the same study to be derived)
+    #     if self.study_uid != other.study_uid:
+    #         return False  # Different studies, cannot be derived
         
-        if self.image_type and not self.image_type.is_derived:
-            return False  # If this series is explicitly marked as original, it cannot be derived
+    #     if self.image_type and not self.image_type.is_derived:
+    #         return False  # If this series is explicitly marked as original, it cannot be derived
         
-        if self.acquisition and self.acquisition.source_image_sequences and self.acquisition.source_image_sequences.value and other.instances:
-            # If this series references the SOPInstanceUIDs of the other series, it's likely derived
-            if any(uid in self.acquisition.source_image_sequences.value for uid in other.instances):
-                return True
+    #     if self.acquisition and self.acquisition.source_image_sequences and self.acquisition.source_image_sequences.value and other.instances:
+    #         # If this series references the SOPInstanceUIDs of the other series, it's likely derived
+    #         if any(uid in self.acquisition.source_image_sequences.value for uid in other.instances):
+    #             return True
             
-        # Same geometry and temporal features but different UIDs could indicate a derived series (e.g. MPR, perfusion maps)
-        if self.geometry and other.geometry and self.geometry == other.geometry:
-            if self.temporal and other.temporal and self.temporal == other.temporal:
-                return True
+    #     # Same geometry and temporal features but different UIDs could indicate a derived series (e.g. MPR, perfusion maps)
+    #     if self.geometry and other.geometry and self.geometry == other.geometry:
+    #         if self.temporal and other.temporal and self.temporal == other.temporal:
+    #             return True
             
-        return False
+    #     return False

@@ -1,7 +1,6 @@
 """
 Module for ML classification using manually-checked heuristic scores as training data.
 """
-from ..extract.series import SeriesFeatures
-from ..extract.dataset import Dataset
-from ..infer.core import DatasetsInference
+
+# features_root: UPath = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features")
 
