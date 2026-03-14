@@ -404,6 +404,18 @@ class GeometryFeatures(BaseModel):
                 ("Geometry hash", self.geometry_hash),
             ],
         )
+        
+    def __eq__(self, other: Self | object) -> bool:
+        if not isinstance(other, GeometryFeatures):
+            return False
+        return (
+            self.rows == other.rows and
+            self.columns == other.columns and
+            self.num_slices == other.num_slices and
+            self.voxel_size == other.voxel_size and
+            self.matrix_size == other.matrix_size and
+            self.geometry_hash == other.geometry_hash
+        )
     
     @staticmethod
     def get_column_headers(prefix: str = "") -> list[str]:
@@ -526,6 +538,23 @@ class TemporalFeatures(BaseModel):
                 ("Is isotropic", self.is_isotropic),
                 ("Echo train length", self.echo_train_length),
             ],
+        )
+        
+    def __eq__(self, other: Self | object) -> bool:
+        if not isinstance(other, TemporalFeatures):
+            return False
+        return (
+            self.repetition_time == other.repetition_time and
+            self.echo_time == other.echo_time and
+            self.inversion_time == other.inversion_time and
+            self.flip_angle == other.flip_angle and
+            self.num_timepoints == other.num_timepoints and
+            self.temporal_variation == other.temporal_variation and
+            self.tr_bucket == other.tr_bucket and
+            self.te_bucket == other.te_bucket and
+            self.is_3D == other.is_3D and
+            self.is_isotropic == other.is_isotropic and
+            self.echo_train_length == other.echo_train_length
         )
     
     @staticmethod
@@ -1446,6 +1475,7 @@ class AcquisitionFeatures(BaseModel):
     acquisition_time: Optional[SeriesNumericFeature] = None
     series_time: Optional[datetime] = None
     acquisition_order: Optional[float] = None  # POSIX timestamp
+    source_image_sequences: Optional[SeriesCategoricalFeature] = None  # Presence of Source Image Sequence (for derived images)
 
     def __str__(self) -> str:
         return format_section(
@@ -1454,6 +1484,7 @@ class AcquisitionFeatures(BaseModel):
                 ("Acquisition time (s)", self.acquisition_time),
                 ("Series time (datetime)", self.series_time.isoformat() if self.series_time else None),
                 ("Acquisition order (timestamp)", self.acquisition_order),
+                ("Source image sequences", self.source_image_sequences),
             ],
         )
     
@@ -1561,11 +1592,21 @@ class AcquisitionFeatures(BaseModel):
             if timestamp:
                 series_time = timestamp
                 break
+            
+        referenced_classes = []
+        for ds in datasets:
+            for seq in ds.get("SourceImageSequence", []):
+                referenced_class = seq.get("ReferencedSOPClassUID")
+                if referenced_class:
+                    referenced_classes.append(referenced_class)
+        
+        source_image_sequences = SeriesCategoricalFeature.from_values(referenced_classes)
 
         return cls(
             acquisition_time=acq_feature,
             series_time=series_time,
             acquisition_order=acquisition_order,
+            source_image_sequences=source_image_sequences,
         )
     
     def flatten(self) -> dict[str, Optional[float | str]]:
@@ -1585,6 +1626,7 @@ class SeriesFeatures(BaseModel):
     study_uid: str
     modality: Optional[SeriesCategoricalFeature] = None
     series_number: Optional[SeriesNumericFeature] = None
+    instances: Optional[list[str]] = None  # List of SOPInstanceUIDs
 
     num_instances: int
     num_unique_slices: int
@@ -1731,6 +1773,7 @@ class SeriesFeatures(BaseModel):
         series_number = SeriesNumericFeature.from_values(
             get_tag_value(ds, "SeriesNumber", None) for ds in datasets
         )
+        instances = [str(get_tag_value(ds, "SOPInstanceUID", None)) for ds in datasets]
 
         # -----------------------
         # Simple counts
@@ -1831,6 +1874,7 @@ class SeriesFeatures(BaseModel):
             study_uid=study_uid,
             modality=modality,
             series_number=series_number,
+            instances=instances,
             num_instances=num_instances,
             num_unique_slices=num_unique_slices,
             num_volumes=num_volumes,
@@ -1876,6 +1920,7 @@ class SeriesFeatures(BaseModel):
             "study_uid": self.study_uid,
             "modality": self.modality.value if self.modality else None,
             "series_number": self.series_number.value if self.series_number else None,
+            "instances": self.instances,
             "num_instances": self.num_instances,
             "num_unique_slices": self.num_unique_slices,
             "num_volumes": self.num_volumes,
@@ -1911,3 +1956,28 @@ ON CONFLICT(subject_id, session_id, series_id, series_description) DO UPDATE SET
         series_description = self.text.series_description.text if self.text and self.text.series_description else None
         conn.execute(insert_query, (subject_id, session_id, self.series_uid, series_description, json.dumps(self.model_dump())))
         conn.commit()
+        
+    def is_derived_from(self, other: Self) -> bool:
+        """Determine if this series is likely derived from another series based on metadata features"""
+        # Check for matching UIDs (exact match means same series)
+        if self.series_uid == other.series_uid:
+            return False  # Same series, not derived
+        
+        # Check for shared StudyInstanceUID (must be the same study to be derived)
+        if self.study_uid != other.study_uid:
+            return False  # Different studies, cannot be derived
+        
+        if self.image_type and not self.image_type.is_derived:
+            return False  # If this series is explicitly marked as original, it cannot be derived
+        
+        if self.acquisition and self.acquisition.source_image_sequences and self.acquisition.source_image_sequences.value and other.instances:
+            # If this series references the SOPInstanceUIDs of the other series, it's likely derived
+            if any(uid in self.acquisition.source_image_sequences.value for uid in other.instances):
+                return True
+            
+        # Same geometry and temporal features but different UIDs could indicate a derived series (e.g. MPR, perfusion maps)
+        if self.geometry and other.geometry and self.geometry == other.geometry:
+            if self.temporal and other.temporal and self.temporal == other.temporal:
+                return True
+            
+        return False

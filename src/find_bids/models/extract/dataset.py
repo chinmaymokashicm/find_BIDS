@@ -326,7 +326,7 @@ class Dataset(BaseModel):
                             else:
                                 raise e
                         features_save_path.parent.mkdir(parents=True, exist_ok=True)
-                        features_save_path.write_text(json.dumps(features.model_dump(), indent=4))
+                        features_save_path.write_text(features.model_dump_json(indent=4))
                     else:
                         features = SeriesFeatures.from_json(features_save_path)
                     all_features[subject.subject_id][session.session_id][series.series_id] = features
