@@ -134,7 +134,6 @@ def get_features_from_series(features_root: UPath, save: bool = True, sample_sub
             skip_unavailable=True,
             sample_subjects=sample_subjects
             )
-        print(all_features)
         for subject_id, sessions in all_features.items():
             for session_id, series_dict in sessions.items():
                 for series_id, features in series_dict.items():
