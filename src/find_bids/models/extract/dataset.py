@@ -16,6 +16,7 @@ import os, re, json
 from typing import Optional, Iterable, Iterator, Self, Any, Literal
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 import sqlite3
+from datetime import datetime
 
 from pydantic import BaseModel, field_validator, ConfigDict
 import pydicom as dicom
@@ -87,7 +88,6 @@ class Dataset(BaseModel):
         if isinstance(json_path, str):
             json_path = UPath(json_path)
         
-        # data = json.loads(json_path.read_text())
         with json_path.open("r") as f:
             data = json.load(f)
         
@@ -355,7 +355,7 @@ class Dataset(BaseModel):
         if self.subjects is None:
             return {}
         export_path: UPath = self.features_root / "dataset.json"
-        export_path.write_text(json.dumps(self.model_dump(mode="json"), indent=4))
+        export_path.write_text(self.model_dump_json(indent=4))
         return self.model_dump()
     
     def export_all_features_to_table(self) -> None:

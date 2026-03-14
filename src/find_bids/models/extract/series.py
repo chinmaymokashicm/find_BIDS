@@ -79,11 +79,14 @@ def read_dicom_header(path: UPath) -> Optional[dicom.Dataset]:
     except Exception:
         return None
 
-def get_tag_value(ds: dicom.Dataset, tag: str | tuple[int, int], default=None) -> Optional[Any]:
+def get_tag_value(ds: dicom.Dataset, tag: str | tuple[int, int] | int, default=None) -> Optional[Any]:
     """Fetch value by keyword or (Group, Element) tuple."""
     try:
         if isinstance(tag, str):
             return getattr(ds, tag, default)
+        if isinstance(tag, int):
+            return ds.get(tag, default)
+
         if tag in ds:
             return ds[tag].value
     except Exception:
@@ -148,27 +151,29 @@ def parse_dicom_time(time_str: Optional[str]) -> Optional[float]:
     except Exception:
         return None
 
-def parse_dicom_datetime(datetime_str: Optional[str]) -> Optional[Any]:
+def parse_dicom_datetime(datetime_str: Optional[str], remove_fractional: bool = True) -> Optional[datetime]:
     """Parse DICOM datetime string (format: YYYYMMDDHHMMSS.FFFFFF) into a datetime object"""
     if datetime_str is None:
         return None
+    if not isinstance(datetime_str, str):
+        raise ValueError(f"Expected a string for datetime parsing, got {type(datetime_str)}")
     try:
-        if isinstance(datetime_str, str):
-            # Remove fractional seconds if present
-            if "." in datetime_str:
-                datetime_str = datetime_str.split(".")[0]
+        # Remove fractional seconds if present
+        if remove_fractional and "." in datetime_str:
+            datetime_str = datetime_str.split(".")[0]
             return datetime.strptime(datetime_str, "%Y%m%d%H%M%S")
-        return None
+        else:
+            return datetime.strptime(datetime_str, "%Y%m%d%H%M%S.%f")
     except Exception:
         return None
 
-def parse_dicom_date_time(date_str: Optional[str], time_str: Optional[str]) -> Optional[datetime]:
+def parse_dicom_date_time(date_str: Optional[str], time_str: Optional[str], remove_fractional: bool = True) -> Optional[datetime]:
     """Parse DICOM date (YYYYMMDD) and time (HHMMSS.FFFFFF) strings into a datetime object"""
     if date_str is None or time_str is None:
         return None
     try:
         # Remove fractional seconds if present
-        if "." in time_str:
+        if remove_fractional and "." in time_str:
             time_str = time_str.split(".")[0]
         datetime_combined = f"{date_str}{time_str}"
         return datetime.strptime(datetime_combined, "%Y%m%d%H%M%S")
@@ -1446,9 +1451,9 @@ class AcquisitionFeatures(BaseModel):
         return format_section(
             "Acquisition Features",
             [
-                ("Acquisition time (median)", self.acquisition_time),
-                ("Series time (median)", self.series_time),
-                ("Acquisition order (POSIX timestamp)", self.acquisition_order),
+                ("Acquisition time (s)", self.acquisition_time),
+                ("Series time (datetime)", self.series_time.isoformat() if self.series_time else None),
+                ("Acquisition order (timestamp)", self.acquisition_order),
             ],
         )
     
@@ -1511,30 +1516,19 @@ class AcquisitionFeatures(BaseModel):
         ]
         acq_feature = SeriesNumericFeature.from_values(acq_times)
 
-        series_datetimes = []
-        for ds in datasets:
-            series_time_raw = get_tag_value(ds, "SeriesTime", None)
-            if not series_time_raw:
-                continue
-
-            series_date_raw = get_tag_value(ds, "SeriesDate", None)
-            if not series_date_raw:
-                series_date_raw = (
-                    get_tag_value(ds, "AcquisitionDate", None)
-                    or get_tag_value(ds, "StudyDate", None)
-                )
-
-            if not series_date_raw:
-                continue
-
-            parsed_series_dt = parse_dicom_date_time(series_date_raw, series_time_raw)
-            if parsed_series_dt:
-                series_datetimes.append(parsed_series_dt)
-
+        date_tags = [0x00211060, 0x0019109D, "AcquisitionDateTime", "AcquisitionDate", "StudyDate", "SeriesDate"]
         series_time = None
-        if series_datetimes:
-            sorted_series_datetimes = sorted(series_datetimes)
-            series_time = sorted_series_datetimes[len(sorted_series_datetimes) // 2]
+        for ds in datasets:
+            for tag in date_tags:
+                datetime_str = get_tag_value(ds, tag, None)
+                if datetime_str:
+                    if isinstance(datetime_str, dicom.DataElement):
+                        datetime_str = datetime_str.value
+                    series_time = parse_dicom_datetime(datetime_str)
+                    print(f"Extracted series time from tag {tag}: {series_time.isoformat() if series_time else 'None'}")
+                    if series_time:
+                        print(f"Using series time from tag {tag} for acquisition order calculation: {series_time.isoformat()}")
+                        break
 
         return cls(
             acquisition_time=acq_feature,

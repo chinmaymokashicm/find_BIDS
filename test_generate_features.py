@@ -32,13 +32,14 @@ def process_dataset(dataset_name: str, paths: dict, db_path: Optional[UPath] = N
 
     # Use a thread-local SQLite connection to avoid cross-thread connection usage.
     # conn = initialize_features_db(db_path)
-    try:
-        dataset.generate_features(skip_unavailable=True, conn=None)
-    finally:
-        pass
+    # try:
+    #     dataset.generate_features(skip_unavailable=True, conn=None)
+    # finally:
+    #     pass
+    dataset.generate_features(skip_unavailable=True)
 
-    dataset.generate_bids_ids(replace_existing=True)
-    dataset.to_json()
+    # dataset.generate_bids_ids(replace_existing=True)
+    # dataset.to_json()
     return dataset_name
 
 # Generate features for multiple datasets and merge into a single table
