@@ -244,6 +244,21 @@ class Dataset(BaseModel):
                 
         return cls(dir_root=dir_root, features_root=features_root, dtype=dtype, subjects=subjects)
     
+    def rebuild_paths_with_new_root(self, old_root: UPath | str, new_root: UPath | str) -> None:
+        """
+        Rebuild all paths in the dataset by replacing the old root with the new root. This is useful if the dataset has been moved to a new location and the paths need to be updated accordingly.
+        """
+        old_root = UPath(old_root)
+        new_root = UPath(new_root)
+        if self.subjects is None:
+            return
+        self.features_root = new_root / self.features_root.relative_to(old_root)
+        for subject in self.subjects:
+            for session in subject.sessions or []:
+                session.path = new_root / session.path.relative_to(old_root)
+                for series in session.series or []:
+                    series.path = new_root / series.path.relative_to(old_root)
+    
     def generate_bids_ids(self, replace_existing: bool = True) -> None:
         """
         Generate BIDS participant_id for each subject and session_id for each session in the dataset, based on their order in the sorted list of subjects and sessions. 

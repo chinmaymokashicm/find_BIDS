@@ -120,7 +120,24 @@ TIER1_FEATURES = [
 ]
 
 
-def get_features_from_series(features_root: UPath, save: bool = True, sample_subjects: Optional[int] = 5) -> pd.DataFrame:
+def get_features_from_series(
+    features_root: UPath,
+    load_existing: bool = True,
+    save: bool = True,
+    sample_subjects: Optional[int] = None,
+    rebuild_old_root: Optional[str | UPath] = None,
+    rebuild_new_root: Optional[str | UPath] = None
+    ) -> pd.DataFrame:
+    index_cols = ["dataset", "subject", "session", "series"]
+    if load_existing:
+        existing_csv_path = features_root / "all_series_features.csv"
+        if existing_csv_path.exists():
+            print(f"Loading existing features from {existing_csv_path}")
+            with existing_csv_path.open("r") as f:
+                df = pd.read_csv(f, index_col=index_cols)
+            return df
+        else:
+            print(f"No existing features found at {existing_csv_path}, regenerating...")
     rows = []
     for dataset_name in features_root.iterdir():
         if not dataset_name.is_dir():
@@ -130,14 +147,16 @@ def get_features_from_series(features_root: UPath, save: bool = True, sample_sub
             print(f"Warning: No dataset.json found for {dataset_name}, skipping.")
             continue
         dataset = Dataset.from_json(dataset_json_path)
-        all_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = dataset.generate_features(
+        if rebuild_old_root and rebuild_new_root:
+            dataset.rebuild_paths_with_new_root(old_root=rebuild_old_root, new_root=rebuild_new_root)
+        dataset_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = dataset.generate_features(
             skip_unavailable=True,
             sample_subjects=sample_subjects
             )
-        for subject_id, sessions in all_features.items():
+        for subject_id, sessions in dataset_features.items():
             for session_id, series_dict in sessions.items():
-                for series_id, features in series_dict.items():
-                    flattened_features: dict = features.flatten()
+                for series_id, series_features in series_dict.items():
+                    flattened_features: dict = series_features.flatten()
                     row = {
                         "dataset": dataset_name.name,
                         "subject": subject_id,
@@ -147,8 +166,8 @@ def get_features_from_series(features_root: UPath, save: bool = True, sample_sub
                     }
                     rows.append(row)
 
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows).set_index(index_cols)
     if save:
         with (features_root / "all_series_features.csv").open("w") as f:
-            df.to_csv(f, index=False)
+            df.to_csv(f, index=True)
     return df
