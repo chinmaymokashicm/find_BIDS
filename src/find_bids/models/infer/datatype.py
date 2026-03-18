@@ -1,5 +1,24 @@
+from .acquisition import (
+    DIFFUSION_INTENT_THRESHOLD,
+    EPI_FAMILY_THRESHOLD,
+    FIELDMAP_INTENT_THRESHOLD,
+    GRE_FAMILY_THRESHOLD,
+    get_acquisition_family_scores,
+    get_acquisition_intent_scores,
+    is_epi,
+    LOCALIZER_INTENT_THRESHOLD,
+    PERFUSION_INTENT_THRESHOLD,
+    SE_TSE_FAMILY_THRESHOLD,
+)
 from .schema import Datatype
-from .utils import is_epi, collect_tokens, softmax
+from .utils import (
+    collect_tokens,
+    softmax,
+    ScoringRule,
+    apply_rules,
+    flag_true,
+    token_matches
+    )
 from .rules import (
     LOCALIZER_KEYWORDS,
     DERIVED_MAP_KEYWORDS,
@@ -20,381 +39,66 @@ from typing import Optional
 from rich.progress import track
 import pandas as pd
 
-# ! Not using it currently
-def score_exclude(series: SeriesFeatures, tokens: set[str]) -> int:
-    """
-    Score for exclusion from BIDS raw dataset.
-    High scores indicate series that should be excluded:
-    localizers, derived maps (ADC/FA/TRACE, CBF/CBV, etc.), MIPs,
-    surgical navigation exports, ORIG duplicates, heavily reformatted/projection images, etc.
-    """
-    score = 0
 
+# ---------------------------------------------------------------------------
+# Shared exclusion signals (used by score_exclude and score_derived)
+# ---------------------------------------------------------------------------
+
+def _score_exclusion_signals(series: SeriesFeatures, tokens: set[str]) -> float:
     imagetype = series.image_type
     textmeta = series.text
     temporal = series.temporal
     spatial = series.spatial
 
-    # --- Strong positive evidence for exclusion ---
-
-    # Localizers (text tokens)
-    if tokens & LOCALIZER_KEYWORDS:
-        score += 6
-
-    # Derived maps (FA, Trace, ADC, CBF, CBV, etc.) from text
-    if tokens & DERIVED_MAP_KEYWORDS:
-        score += 6
-
-    # Surgical navigation exports
-    if tokens & SURGICAL_NAV_KEYWORDS:
-        score += 6
-
-    # Timestamp-stamped derived maps in raw text (e.g., "ADC 2021-05-03 10:23")
-    if textmeta and textmeta.series_description and textmeta.series_description.text:
-        desc = textmeta.series_description.text
-        if DERIVED_TIMESTAMP_PATTERN.search(desc):
-            score += 5
-
-        # "ORIG:" prefix often indicates duplicates/backups
-        if desc.lower().startswith("orig:"):
-            score += 4
-
-    # ImageType-based exclusion cues
-    if imagetype:
-        # Explicit localizer flag
-        if imagetype.is_localizer and imagetype.is_localizer.value:
-            score += 6
-
-        # MIP/projection/reformatted images
-        if imagetype.is_mip and imagetype.is_mip.value:
-            score += 4
-        if imagetype.is_projection and imagetype.is_projection.value:
-            score += 4
-        if imagetype.is_reformatted and imagetype.is_reformatted.value:
-            score += 4
-
-        # Derived diffusion/perfusion maps
-        if imagetype.is_adc and imagetype.is_adc.value:
-            score += 5
-        if imagetype.is_fa and imagetype.is_fa.value:
-            score += 5
-        if imagetype.is_trace and imagetype.is_trace.value:
-            score += 5
-        if imagetype.is_cbf and imagetype.is_cbf.value:
-            score += 5
-        if imagetype.is_cbv and imagetype.is_cbv.value:
-            score += 5
-
-    # --- Weaker structural cues for exclusion ---
-
-    # Extremely thick slices + very few slices → often scouts/localizers
+    desc = textmeta.series_description.text if (textmeta and textmeta.series_description) else None
     thickness = spatial.slice_thickness.value if (spatial and spatial.slice_thickness) else None
-    if thickness is not None and thickness >= 8.0:
-        # Only if there is no strong evidence for being a main anat series
-        score += 2
-
-    # Very few slices and few timepoints: likely scout/localizer (already mostly caught above)
     n_tp = temporal.num_timepoints if temporal else None
     num_slices = series.geometry.num_slices if series.geometry else None
-    if num_slices is not None and num_slices <= 5 and (n_tp is None or n_tp <= 3):
-        score += 2
 
-    return score
-
-# ! Not using it currently
-def score_derived(series: SeriesFeatures, tokens: set[str]) -> int:
-    """
-    Score for being a derived map (FA/ADC/Trace, CBF/CBV, etc.) that should be excluded from raw BIDS.   
-    High scores indicate series that are likely derived maps, which should be labeled with appropriate suffixes but not included as raw data.
-    This is a separate score from "exclude" because some derived maps may still be useful to include in the BIDS dataset with proper labeling, while others (e.g., surgical nav exports) should be excluded entirely.
-    Note: This is a heuristic score and may not perfectly separate all cases, but it can help flag likely derived maps for further review or special handling.
-    A high derived score combined with a high exclude score would strongly suggest a series is a derived map that should be excluded from raw BIDS, while a high derived score with a low exclude score might indicate a series that should be included but labeled as a derivative.
-    
-    Args:
-        series: SeriesFeatures object containing extracted features of the series
-        tokens: Set of text tokens extracted from the series metadata (e.g., SeriesDescription, SequenceName, etc.)
-        
-    Returns:
-        score: Integer score indicating likelihood of being a derived map (higher means more likely)
-    """
-    score = 0
-
-    imagetype = series.image_type
-    textmeta = series.text
-    temporal = series.temporal
-    spatial = series.spatial
-
-    # --- Strong positive evidence for exclusion ---
-
-    # Localizers (text tokens)
-    if tokens & LOCALIZER_KEYWORDS:
-        score += 6
-
-    # Derived maps (FA, Trace, ADC, CBF, CBV, etc.) from text
-    if tokens & DERIVED_MAP_KEYWORDS:
-        score += 6
-
-    # Surgical navigation exports
-    if tokens & SURGICAL_NAV_KEYWORDS:
-        score += 6
-
-    # Timestamp-stamped derived maps in raw text (e.g., "ADC 2021-05-03 10:23")
-    if textmeta and textmeta.series_description and textmeta.series_description.text:
-        desc = textmeta.series_description.text
-        if DERIVED_TIMESTAMP_PATTERN.search(desc):
-            score += 5
-
-        # "ORIG:" prefix often indicates duplicates/backups
-        if desc.lower().startswith("orig:"):
-            score += 4
-
-    # ImageType-based exclusion cues
-    if imagetype:
-        # Explicit localizer flag
-        if imagetype.is_localizer and imagetype.is_localizer.value:
-            score += 6
-
-        # MIP/projection/reformatted images
-        if imagetype.is_mip and imagetype.is_mip.value:
-            score += 4
-        if imagetype.is_projection and imagetype.is_projection.value:
-            score += 4
-        if imagetype.is_reformatted and imagetype.is_reformatted.value:
-            score += 4
-
-        # Derived diffusion/perfusion maps
-        if imagetype.is_adc and imagetype.is_adc.value:
-            score += 5
-        if imagetype.is_fa and imagetype.is_fa.value:
-            score += 5
-        if imagetype.is_trace and imagetype.is_trace.value:
-            score += 5
-        if imagetype.is_cbf and imagetype.is_cbf.value:
-            score += 5
-        if imagetype.is_cbv and imagetype.is_cbv.value:
-            score += 5
-
-    # --- Weaker structural cues for exclusion ---
-
-    # Extremely thick slices + very few slices → often scouts/localizers
-    thickness = spatial.slice_thickness.value if (spatial and spatial.slice_thickness) else None
-    if thickness is not None and thickness >= 8.0:
-        # Only if there is no strong evidence for being a main anat series
-        score += 2
-
-    # Very few slices and few timepoints: likely scout/localizer (already mostly caught above)
-    n_tp = temporal.num_timepoints if temporal else None
-    num_slices = series.geometry.num_slices if series.geometry else None
-    if num_slices is not None and num_slices <= 5 and (n_tp is None or n_tp <= 3):
-        score += 2
-
-    return score
-
-def score_fmap(series: SeriesFeatures, tokens: set[str]) -> int:
-    score = 0
-
-    imagetype = series.image_type
-    multiecho = series.multi_echo
-    temporal = series.temporal
-    spatial = series.spatial
-    
-    n_tp = temporal.num_timepoints if temporal else None
-    epi = is_epi(series)
-    is3d = bool(temporal and temporal.is_3D)
-    num_echoes = multiecho.num_echoes if multiecho else None
-    thickness = spatial.slice_thickness.value if (spatial and spatial.slice_thickness) else None
-
-    is_mag = bool(imagetype and imagetype.is_magnitude and imagetype.is_magnitude.value)
-    is_phase = bool(imagetype and imagetype.is_phase and imagetype.is_phase.value)
-
-    # ---------------------------------------------------------
-    # 1. THE RESOLUTION GATE
-    # ---------------------------------------------------------
-    # Fieldmaps are 2D; 3D volumes (like ME-MPRAGE) are anatomical.
-    if is3d:
-        score -= 20
-
-    # High-res isotropic scans are structural, not BIDS fieldmaps.
-    if thickness is not None and thickness < 1.5:
-        score -= 15
-
-    # ---------------------------------------------------------
-    # 2. POSITIVE EVIDENCE
-    # ---------------------------------------------------------
-    if tokens & FMAP_KEYWORDS:
-        score += 6
-
-    # Classic Magnitude/Phase pattern for fieldmaps
-    if n_tp is not None and n_tp <= 2:
-        if is_mag or is_phase:
-            score += 5
-
-    # Short EPI PE-polar fieldmaps (TOPUP)
-    if epi and n_tp is not None and 2 <= n_tp <= 6:
-        score += 3
-
-    # ---------------------------------------------------------
-    # 3. ANATOMICAL EXCLUSION
-    # ---------------------------------------------------------
-    # Multi-echo anatomical mapping (e.g. T2*)
-    if (tokens & ANAT_KEYWORDS) and num_echoes and num_echoes > 1:
-        score -= 15
-
-    if (tokens & ANAT_KEYWORDS) and not (tokens & FMAP_KEYWORDS):
-        score -= 10
-
-    return score
-
-def score_dwi(series: SeriesFeatures, tokens: set[str]) -> int:
-    score = 0
-    diffusion = series.diffusion
-    temporal = series.temporal
-    imagetype = series.image_type
-    perfusion = series.perfusion
-
-    n_tp = temporal.num_timepoints if temporal else None
-    epi = is_epi(series)
-
-    bvals = diffusion.b_values if (diffusion and diffusion.b_values) else None
-    num_dirs = diffusion.num_diffusion_directions if diffusion else None
-    num_vols = diffusion.num_diffusion_volumes if diffusion else None
-    num_b0 = diffusion.num_b0 if diffusion else None
-
-    has_diffusion_flag = bool(diffusion and diffusion.has_diffusion and diffusion.has_diffusion.value)
-    has_diffusion_imagetype = bool(imagetype and imagetype.has_diffusion and imagetype.has_diffusion.value)
-    
-    has_adc = bool(imagetype and imagetype.is_adc and imagetype.is_adc.value)
-    has_fa = bool(imagetype and imagetype.is_fa and imagetype.is_fa.value)
-    has_trace = bool(imagetype and imagetype.is_trace and imagetype.is_trace.value)
-
-    has_perfusion_flag = bool(
-        (imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value)
-        or (perfusion and (perfusion.perfusion_labeling_type or perfusion.perfusion_series_type or perfusion.contrast_agent))
+    return apply_rules(
+        (token_matches(tokens, LOCALIZER_KEYWORDS), 6),
+        (token_matches(tokens, DERIVED_MAP_KEYWORDS), 6),
+        (token_matches(tokens, SURGICAL_NAV_KEYWORDS), 6),
+        (desc and bool(DERIVED_TIMESTAMP_PATTERN.search(desc)), 5),
+        (desc and desc.lower().startswith("orig:"), 4),
+        (imagetype and flag_true(imagetype, "is_localizer"), 6),
+        (imagetype and flag_true(imagetype, "is_mip"), 4),
+        (imagetype and flag_true(imagetype, "is_projection"), 4),
+        (imagetype and flag_true(imagetype, "is_reformatted"), 4),
+        (imagetype and flag_true(imagetype, "is_adc"), 5),
+        (imagetype and flag_true(imagetype, "is_fa"), 5),
+        (imagetype and flag_true(imagetype, "is_trace"), 5),
+        (imagetype and flag_true(imagetype, "is_cbf"), 5),
+        (imagetype and flag_true(imagetype, "is_cbv"), 5),
+        (thickness is not None and thickness >= 8.0, 2),
+        (num_slices is not None and num_slices <= 5 and (n_tp is None or n_tp <= 3), 2),
     )
 
-    # ---------------------------------------------------------
-    # 1. PHYSICS
-    # ---------------------------------------------------------
-    has_nonzero_bvals = bool(bvals and any(b > 50 for b in bvals))
-    if has_nonzero_bvals: score += 4
-    if bool(bvals and any(b >= 800 for b in bvals)): score += 2
-    if bool(num_dirs is not None and num_dirs >= 6): score += 4
-    if num_vols is not None and num_vols >= 20: score += 2
-    if num_b0 is not None and num_b0 >= 2: score += 1
 
-    if epi and n_tp is not None and n_tp > 1:
-        if n_tp >= 10: score += 1
-        if n_tp >= 20: score += 1
-
-    if has_diffusion_flag or has_diffusion_imagetype:
-        score += 3
-
-    # ---------------------------------------------------------
-    # 2. THE TEXTUAL FALLBACK (Fix for missing DWI)
-    # ---------------------------------------------------------
-    if tokens & DIFFUSION_KEYWORDS:
-        score += 5  # Boosted significantly to catch missing b-value headers
-        if epi:
-            score += 5  # EPI + Diffusion name = Almost certainly DWI
-
-    if has_adc or has_fa or has_trace:
-        score += 2
-        if n_tp is not None and n_tp <= 2:
-            score += 1
-
-    # ---------------------------------------------------------
-    # 3. EXCLUSIONS
-    # ---------------------------------------------------------
-    if has_perfusion_flag: score -= 4
-    if perfusion and perfusion.num_timepoints and perfusion.num_timepoints > 40: score -= 2
-    if epi and n_tp is not None and n_tp > 50 and (tokens & FUNC_KEYWORDS): score -= 4
-    if (tokens & ANAT_KEYWORDS) and not (has_nonzero_bvals or has_diffusion_imagetype or (tokens & DIFFUSION_KEYWORDS)): score -= 3
-    if imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value: score -= 3
-
-    return score
+# ! Not using it currently
+def score_exclude(series: SeriesFeatures, tokens: set[str]) -> float:
+    """Score for exclusion from BIDS raw dataset. High = should be excluded."""
+    return _score_exclusion_signals(series, tokens)
 
 
-def score_perf(series: SeriesFeatures, tokens: set[str]) -> int:
-    score = 0
-    perf = series.perfusion
-    temporal = series.temporal
+# ! Not using it currently
+def score_derived(series: SeriesFeatures, tokens: set[str]) -> float:
+    """Score for being a derived map that should be excluded from raw BIDS."""
+    return _score_exclusion_signals(series, tokens)
+
+def score_localizer(series: SeriesFeatures, tokens: set[str]) -> float:
     imagetype = series.image_type
-    n_tp = temporal.num_timepoints if temporal else None
-    epi = is_epi(series)
+    textmeta = series.text
 
-    if perf:
-        if perf.perfusion_labeling_type and perf.perfusion_labeling_type.value: score += 10
-        if n_tp is not None and 60 <= n_tp <= 120: score += 4
-        if perf.contrast_agent and perf.contrast_agent.value: score += 3
+    desc = textmeta.series_description.text if (textmeta and textmeta.series_description) else None
 
-    if imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value:
-        score += 5
+    return apply_rules(
+        (token_matches(tokens, LOCALIZER_KEYWORDS), 6),
+        (desc and desc.lower().startswith("loc"), 4),
+        (imagetype and flag_true(imagetype, "is_localizer"), 6),
+    )
 
-    has_contrast = bool(series.contrast and series.contrast.contrast_agent and 
-                        series.contrast.contrast_agent.value and 
-                        len(series.contrast.contrast_agent.value) > 0)
-
-    # ---------------------------------------------------------
-    # 1. THE DCE FIX (Allow non-EPI contrast series to win)
-    # ---------------------------------------------------------
-    # DCE is usually NOT EPI. It's a 3D T1 sequence run many times.
-    if has_contrast and n_tp is not None and n_tp > 10:
-        score += 10
-
-    if epi and (tokens & PERFUSION_KEYWORDS):
-        score += 6
-
-    if (tokens & ANAT_KEYWORDS) and not (tokens & PERFUSION_KEYWORDS or perf or has_contrast):
-        score -= 5
-
-    return score
-
-
-def score_func(series: SeriesFeatures, tokens: set[str]) -> int:
-    score = 0
-    temporal = series.temporal
-    encoding = series.encoding
-    diffusion = series.diffusion
-    perfusion = series.perfusion
-
-    n_tp = temporal.num_timepoints if temporal else None
-    epi = is_epi(series)
-    tr_bucket = temporal.tr_bucket if temporal else None
-    is3d = bool(temporal and temporal.is_3D)
-
-    if not epi: score -= 15
-    if n_tp is not None and n_tp <= 1: score -= 15
-    if is3d: score -= 8
-
-    if tokens & FUNC_KEYWORDS: score += 5
-
-    if epi and n_tp is not None:
-        if n_tp >= 50: score += 4
-        elif n_tp >= 20: score += 3
-
-    if epi and tr_bucket in ("short", "medium"): score += 2
-
-    has_contrast = bool(series.contrast and series.contrast.contrast_agent and 
-                        series.contrast.contrast_agent.value and 
-                        len(series.contrast.contrast_agent.value) > 0)
-    
-    if has_contrast: score -= 20
-    if (tokens & ANAT_KEYWORDS) and (n_tp is None or n_tp < 10 or not epi): score -= 15
-    if diffusion and diffusion.has_diffusion and diffusion.has_diffusion.value: score -= 10
-
-    # ---------------------------------------------------------
-    # 1. THE ASL FIX (Prevent ASL from dominating func)
-    # ---------------------------------------------------------
-    if perfusion and perfusion.perfusion_labeling_type and perfusion.perfusion_labeling_type.value:
-        score -= 20
-    if tokens & PERFUSION_KEYWORDS:
-        score -= 15
-
-    return score
-
-
-def score_anat(series: SeriesFeatures, tokens: set[str]) -> int:
-    score = 0
+def score_anat(series: SeriesFeatures, tokens: set[str]) -> float:
     temporal = series.temporal
     spatial = series.spatial
     sequence = series.sequence
@@ -405,7 +109,7 @@ def score_anat(series: SeriesFeatures, tokens: set[str]) -> int:
     contrast = series.contrast
 
     n_tp = temporal.num_timepoints if temporal else None
-    epi = is_epi(series)
+    epi = is_epi(series, tokens)
     is3d = bool(temporal and temporal.is_3D)
     is_iso = bool(temporal and temporal.is_isotropic)
     tr_bucket = temporal.tr_bucket if temporal else None
@@ -413,46 +117,254 @@ def score_anat(series: SeriesFeatures, tokens: set[str]) -> int:
     num_echoes = multiecho.num_echoes if multiecho else None
     is_multi_echo = bool(num_echoes and num_echoes > 1)
 
-    has_mpr = bool(imagetype and imagetype.is_mpr and imagetype.is_mpr.value)
-    has_diffusion_flag = bool((imagetype and imagetype.has_diffusion and imagetype.has_diffusion.value) or (diffusion and diffusion.has_diffusion and diffusion.has_diffusion.value))
-    has_perfusion_flag = bool((imagetype and imagetype.has_perfusion and imagetype.has_perfusion.value) or (perfusion and (perfusion.perfusion_labeling_type or perfusion.perfusion_series_type or perfusion.contrast_agent)))
-    has_contrast = bool(contrast and contrast.contrast_agent and contrast.contrast_agent.value and len(contrast.contrast_agent.value) > 0)
+    has_mpr = bool(imagetype and flag_true(imagetype, "is_mpr"))
+    has_diffusion_flag = bool(
+        (imagetype and flag_true(imagetype, "has_diffusion"))
+        or (diffusion and flag_true(diffusion, "has_diffusion"))
+    )
+    has_perfusion_flag = bool(
+        (imagetype and flag_true(imagetype, "has_perfusion"))
+        or (perfusion and (perfusion.perfusion_labeling_type or perfusion.perfusion_series_type or perfusion.contrast_agent))
+    )
+    has_contrast = bool(
+        contrast and contrast.contrast_agent and contrast.contrast_agent.value
+        and len(contrast.contrast_agent.value) > 0
+    )
+    is_3d_sequence = bool(
+        sequence and sequence.mr_acquisition_type
+        and sequence.mr_acquisition_type.value
+        and str(sequence.mr_acquisition_type.value).lower() == "3d"
+    )
+    # TE ranges from 10 to 60 - weak evidence
+    in_anat_te_range = bool(
+        multiecho and multiecho.echo_times and multiecho.echo_times[0] >= 10 and multiecho.echo_times[-1] <= 60 # Echo times are expected to be in ascending order, so check first and last for range
+    )
 
-    if tokens & ANAT_KEYWORDS: score += 5
-    if has_mpr: score += 3
-    if n_tp is not None and n_tp <= 3 and not epi: score += 3
-
-    if is3d or (sequence and sequence.mr_acquisition_type and sequence.mr_acquisition_type.value and str(sequence.mr_acquisition_type.value).lower() == "3d"): score += 2
-    if thickness is not None:
-        if thickness < 1.5: score += 2
-        elif thickness < 2.5: score += 1
-    if is_iso: score += 1
-
-    if tr_bucket == "long" and not epi and n_tp is not None and n_tp <= 3: score += 1
-    if has_contrast and not epi and n_tp is not None and n_tp <= 5: score += 1
+    return apply_rules(
+        # Positive signals for anatomical scans
+        (token_matches(tokens, ANAT_KEYWORDS), 5),
+        (has_mpr, 3),
+        (n_tp is not None and n_tp <= 3 and not epi, 3),
+        (is3d or is_3d_sequence, 2),
+        (thickness is not None and thickness < 1.5, 2),
+        (thickness is not None and 1.5 <= thickness < 2.5, 1),
+        (is_iso, 1),
+        (tr_bucket == "long" and not epi and n_tp is not None and n_tp <= 3, 1),
+        (has_contrast and not epi and n_tp is not None and n_tp <= 5, 1),
+        (n_tp in (None, 1) and is3d and not epi and not has_diffusion_flag and not has_perfusion_flag, 4),
+        (in_anat_te_range, 1),
         
-    if n_tp in (None, 1) and is3d and not epi and not has_diffusion_flag and not has_perfusion_flag: score += 4
+        # Negative signals for anatomical scans
+        (token_matches(tokens, LOCALIZER_KEYWORDS), -5),
+        (has_contrast and n_tp is not None and n_tp > 10, -20),
+        (token_matches(tokens, PERFUSION_KEYWORDS), -10),
+        (has_diffusion_flag, -4),
+        (has_perfusion_flag, -4),
+        (perfusion and perfusion.num_timepoints and perfusion.num_timepoints > 40, -2),
+        (epi and n_tp is not None and n_tp > 10 and token_matches(tokens, FUNC_KEYWORDS), -4),
+        (n_tp is not None and n_tp > 10 and not is_multi_echo and not has_contrast, -3),
+        (thickness is not None and thickness > 5.0 and not token_matches(tokens, ANAT_KEYWORDS) and not has_mpr, -2),
+        (imagetype and flag_true(imagetype, "is_localizer"), -5),
+    )
 
-    # ---------------------------------------------------------
-    # 1. THE DCE FIX (Penalize contrast time-series)
-    # ---------------------------------------------------------
-    # A standard post-contrast T1 has 1 volume. If it has 10+, it's a DCE perfusion scan.
-    if has_contrast and n_tp is not None and n_tp > 10:
-        score -= 20
+def score_dwi(series: SeriesFeatures, tokens: set[str]) -> float:
+    diffusion = series.diffusion
+    temporal = series.temporal
+    imagetype = series.image_type
+    perfusion = series.perfusion
 
-    if tokens & PERFUSION_KEYWORDS:
-        score -= 10
+    n_tp = temporal.num_timepoints if temporal else None
+    epi = is_epi(series, tokens)
+    bvals = diffusion.b_values if (diffusion and diffusion.b_values) else None
+    num_dirs = diffusion.num_diffusion_directions if diffusion else None
+    num_vols = diffusion.num_diffusion_volumes if diffusion else None
+    num_b0 = diffusion.num_b0 if diffusion else None
 
-    if has_diffusion_flag: score -= 4
-    if has_perfusion_flag: score -= 4
-    if perfusion and perfusion.num_timepoints and perfusion.num_timepoints > 40: score -= 2
-    if epi and n_tp is not None and n_tp > 10 and (tokens & FUNC_KEYWORDS): score -= 4
-    if n_tp is not None and n_tp > 10 and not is_multi_echo and not has_contrast: score -= 3
+    has_diffusion_flag = bool(
+        (imagetype and flag_true(imagetype, "has_diffusion"))
+        or (diffusion and flag_true(diffusion, "has_diffusion"))
+    )
+    has_adc = imagetype and flag_true(imagetype, "is_adc")
+    has_fa = imagetype and flag_true(imagetype, "is_fa")
+    has_trace = imagetype and flag_true(imagetype, "is_trace")
+    has_perfusion_flag = bool(
+        (imagetype and flag_true(imagetype, "has_perfusion"))
+        or (perfusion and (perfusion.perfusion_labeling_type or perfusion.perfusion_series_type or perfusion.contrast_agent))
+    )
+    has_nonzero_bvals = bool(bvals and any(b > 50 for b in bvals))
 
-    if thickness is not None and thickness > 5.0 and not (tokens & ANAT_KEYWORDS) and not has_mpr: score -= 2
-    if imagetype and imagetype.is_localizer and imagetype.is_localizer.value: score -= 5
+    return apply_rules(
+        # Positive signals for diffusion scans
+        (has_nonzero_bvals, 4),
+        (bvals and any(b >= 800 for b in bvals), 2),
+        (num_dirs is not None and num_dirs >= 6, 4),
+        (num_vols is not None and num_vols >= 20, 2),
+        (num_b0 is not None and num_b0 >= 2, 1),
+        (epi and n_tp is not None and n_tp >= 10, 1),
+        (epi and n_tp is not None and n_tp >= 20, 1),
+        (has_diffusion_flag, 3),
+        (token_matches(tokens, DIFFUSION_KEYWORDS), 5),
+        (epi and token_matches(tokens, DIFFUSION_KEYWORDS), 2),
+        (has_adc or has_fa or has_trace, 2),
+        ((has_adc or has_fa or has_trace) and n_tp is not None and n_tp <= 2, 1),
+        
+        # Negative signals for diffusion scans
+        (token_matches(tokens, LOCALIZER_KEYWORDS), -5),
+        (has_perfusion_flag, -4),
+        (perfusion and perfusion.num_timepoints and perfusion.num_timepoints > 40, -2),
+        (epi and n_tp is not None and n_tp > 50 and token_matches(tokens, FUNC_KEYWORDS), -4),
+        (token_matches(tokens, ANAT_KEYWORDS) and not (has_nonzero_bvals or has_diffusion_flag or token_matches(tokens, DIFFUSION_KEYWORDS)), -3),
+        (imagetype and flag_true(imagetype, "has_perfusion"), -3),
+    )
 
-    return score
+
+def score_perf(series: SeriesFeatures, tokens: set[str]) -> float:
+    perf = series.perfusion
+    temporal = series.temporal
+    imagetype = series.image_type
+    n_tp = temporal.num_timepoints if temporal else None
+    epi = is_epi(series, tokens)
+
+    has_contrast = bool(
+        series.contrast and series.contrast.contrast_agent
+        and series.contrast.contrast_agent.value
+        and len(series.contrast.contrast_agent.value) > 0
+    )
+
+    return apply_rules(
+        # Positive signals for perfusion scans
+        (perf and perf.perfusion_labeling_type and perf.perfusion_labeling_type.value, 10),
+        (perf and n_tp is not None and 60 <= n_tp <= 120, 4),
+        (perf and perf.contrast_agent and perf.contrast_agent.value, 3),
+        (imagetype and flag_true(imagetype, "has_perfusion"), 5),
+        (has_contrast and epi and n_tp is not None and n_tp > 10, 10),
+        (epi and token_matches(tokens, PERFUSION_KEYWORDS), 6),
+        
+        # Negative signals for perfusion scans
+        (token_matches(tokens, LOCALIZER_KEYWORDS), -5),
+        (token_matches(tokens, ANAT_KEYWORDS) and not (token_matches(tokens, PERFUSION_KEYWORDS) or perf or has_contrast), -5),
+    )
+
+
+def score_func(series: SeriesFeatures, tokens: set[str]) -> float:
+    temporal = series.temporal
+    diffusion = series.diffusion
+    perfusion = series.perfusion
+
+    n_tp = temporal.num_timepoints if temporal else None
+    epi = is_epi(series, tokens)
+    tr_bucket = temporal.tr_bucket if temporal else None
+    is3d = bool(temporal and temporal.is_3D)
+
+    has_contrast = bool(
+        series.contrast and series.contrast.contrast_agent
+        and series.contrast.contrast_agent.value
+        and len(series.contrast.contrast_agent.value) > 0
+    )
+
+    return apply_rules(
+        # Positive signals for functional scans
+        (token_matches(tokens, FUNC_KEYWORDS), 5),
+        (epi and n_tp is not None and n_tp >= 50, 4),
+        (epi and n_tp is not None and 20 <= n_tp < 50, 3),
+        (epi and tr_bucket in ("short", "medium"), 2),
+        
+        # Negative signals for functional scans
+        (token_matches(tokens, LOCALIZER_KEYWORDS), -5),
+        (is3d, -8),
+        (diffusion and flag_true(diffusion, "has_diffusion"), -10),
+        (not epi, -10),
+        (n_tp is not None and n_tp <= 1, -15),
+        (token_matches(tokens, PERFUSION_KEYWORDS), -15),
+        (has_contrast, -20),
+        (token_matches(tokens, ANAT_KEYWORDS) and (n_tp is None or n_tp < 10 or not epi), -15),
+        (perfusion and perfusion.perfusion_labeling_type and perfusion.perfusion_labeling_type.value, -20),
+    )
+    
+def score_fmap(series: SeriesFeatures, tokens: set[str]) -> float:
+    imagetype = series.image_type
+    multiecho = series.multi_echo
+    temporal = series.temporal
+    spatial = series.spatial
+    encoding = series.encoding
+
+    n_tp = temporal.num_timepoints if temporal else None
+    epi = is_epi(series, tokens)
+    is3d = bool(temporal and temporal.is_3D)
+    num_echoes = multiecho.num_echoes if multiecho else None
+    thickness = spatial.slice_thickness.value if (spatial and spatial.slice_thickness) else None
+    is_mag = imagetype and flag_true(imagetype, "is_magnitude")
+    is_phase = imagetype and flag_true(imagetype, "is_phase")
+
+    return apply_rules(
+        # Positive signals for fieldmaps
+        (epi and n_tp is not None and 2 <= n_tp <= 6, 3),
+        (n_tp is not None and n_tp <= 2 and (is_mag or is_phase), 5),
+        (token_matches(tokens, FMAP_KEYWORDS), 6),
+        (num_echoes is not None and num_echoes > 2, 4),
+        (epi and series.num_volumes is not None and series.num_volumes <= 10, 3), # EPI fieldmaps often have multiple volumes but still a low number
+        (encoding and encoding.phase_encoding_direction and encoding.phase_encoding_direction.value in ("AP", "PA"), 2), # Fieldmaps often have phase encoding in AP/PA direction
+        
+        # Negative signals for fieldmaps
+        (token_matches(tokens, LOCALIZER_KEYWORDS), -5),
+        (token_matches(tokens, ANAT_KEYWORDS) and not token_matches(tokens, FMAP_KEYWORDS), -10),
+        (is3d, -20),
+        (thickness is not None and thickness < 1.5, -15),
+        (token_matches(tokens, ANAT_KEYWORDS) and num_echoes is not None and num_echoes > 1, -15),
+    )
+
+
+def _apply_acquisition_family_guidance(
+    raw_scores: dict[str, float],
+    series: SeriesFeatures,
+    tokens: set[str],
+) -> None:
+    family_scores = get_acquisition_family_scores(series, tokens)
+    intent_scores = get_acquisition_intent_scores(series, tokens)
+    num_echoes = series.multi_echo.num_echoes if series.multi_echo else None
+
+    raw_scores[Datatype.ANAT.value] += apply_rules(
+        (family_scores["se_tse"] >= SE_TSE_FAMILY_THRESHOLD, 2),
+        (family_scores["gre"] >= GRE_FAMILY_THRESHOLD, 2),
+        (intent_scores["diffusion"] >= DIFFUSION_INTENT_THRESHOLD, -5),
+        (intent_scores["perfusion"] >= PERFUSION_INTENT_THRESHOLD, -4),
+        (intent_scores["fieldmap"] >= FIELDMAP_INTENT_THRESHOLD, -4),
+    )
+    raw_scores[Datatype.FUNC.value] += apply_rules(
+        (family_scores["epi"] >= EPI_FAMILY_THRESHOLD, 2),
+        (intent_scores["diffusion"] >= DIFFUSION_INTENT_THRESHOLD, -5),
+        (intent_scores["perfusion"] >= PERFUSION_INTENT_THRESHOLD, -3),
+        (intent_scores["fieldmap"] >= FIELDMAP_INTENT_THRESHOLD, -3),
+        (intent_scores["localizer"] >= LOCALIZER_INTENT_THRESHOLD, -4),
+    )
+    raw_scores[Datatype.DWI.value] += apply_rules(
+        (intent_scores["diffusion"] >= DIFFUSION_INTENT_THRESHOLD, 5),
+        (family_scores["epi"] >= EPI_FAMILY_THRESHOLD, 1),
+        (intent_scores["fieldmap"] >= FIELDMAP_INTENT_THRESHOLD, -3),
+        (intent_scores["localizer"] >= LOCALIZER_INTENT_THRESHOLD, -4),
+    )
+    raw_scores[Datatype.PERF.value] += apply_rules(
+        (intent_scores["perfusion"] >= PERFUSION_INTENT_THRESHOLD, 4),
+        (family_scores["epi"] >= EPI_FAMILY_THRESHOLD and intent_scores["fieldmap"] < FIELDMAP_INTENT_THRESHOLD, 1),
+        (family_scores["gre"] >= GRE_FAMILY_THRESHOLD and intent_scores["perfusion"] >= PERFUSION_INTENT_THRESHOLD, 1),
+        (family_scores["se_tse"] >= SE_TSE_FAMILY_THRESHOLD and intent_scores["perfusion"] >= PERFUSION_INTENT_THRESHOLD, 1),
+        (intent_scores["diffusion"] >= DIFFUSION_INTENT_THRESHOLD, -4),
+        (intent_scores["fieldmap"] >= FIELDMAP_INTENT_THRESHOLD, -3),
+    )
+    raw_scores[Datatype.FMAP.value] += apply_rules(
+        (intent_scores["fieldmap"] >= FIELDMAP_INTENT_THRESHOLD, 5),
+        (family_scores["epi"] >= EPI_FAMILY_THRESHOLD and intent_scores["fieldmap"] >= FIELDMAP_INTENT_THRESHOLD, 2),
+        (family_scores["gre"] >= GRE_FAMILY_THRESHOLD and num_echoes is not None and num_echoes > 1, 2),
+        (intent_scores["diffusion"] >= DIFFUSION_INTENT_THRESHOLD, -4),
+        (intent_scores["localizer"] >= LOCALIZER_INTENT_THRESHOLD, -4),
+    )
+    raw_scores[Datatype.LOCALIZER.value] += apply_rules(
+        (intent_scores["localizer"] >= LOCALIZER_INTENT_THRESHOLD, 6),
+        (family_scores["gre"] >= GRE_FAMILY_THRESHOLD, 1),
+        (family_scores["se_tse"] >= SE_TSE_FAMILY_THRESHOLD, 1),
+        (intent_scores["diffusion"] >= DIFFUSION_INTENT_THRESHOLD, -4),
+        (intent_scores["fieldmap"] >= FIELDMAP_INTENT_THRESHOLD, -2),
+    )
 
 def score_datatype(
     series: SeriesFeatures,
@@ -473,19 +385,17 @@ def score_datatype(
         Margin between top two candidate probabilities
     """
     raw_scores = {
-        Datatype.ANAT.value: float(score_anat(series, tokens)),
-        Datatype.FUNC.value: float(score_func(series, tokens)),
-        Datatype.DWI.value: float(score_dwi(series, tokens)),
-        Datatype.PERF.value: float(score_perf(series, tokens)),
-        Datatype.FMAP.value: float(score_fmap(series, tokens)),
-        # Datatype.EXCLUDE.value: float(score_exclude(series, tokens)),
+        Datatype.ANAT.value: score_anat(series, tokens),
+        Datatype.FUNC.value: score_func(series, tokens),
+        Datatype.DWI.value: score_dwi(series, tokens),
+        Datatype.PERF.value: score_perf(series, tokens),
+        Datatype.FMAP.value: score_fmap(series, tokens),
+        Datatype.LOCALIZER.value: score_localizer(series, tokens),
+        # Exclude and unknown are not scored here - they are fallbacks based on margins and thresholds
     }
-    
-    # # Determine softmax temperature based on number of datatypes (more datatypes -> higher temperature for softer probabilities)
-    # n_valid_datatypes = len(raw_scores)
-    # temperature = 1.0 + (n_valid_datatypes - 2) * 0.5  # Base temp of 1.0, add 0.5 for each datatype beyond 2
 
-    # probs = softmax(raw_scores, temperature=temperature)
+    _apply_acquisition_family_guidance(raw_scores, series, tokens)
+
     probs = softmax(raw_scores)
     if not probs:
         return {}, "unknown", 0.0

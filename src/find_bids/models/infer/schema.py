@@ -24,6 +24,7 @@ from pydantic import BaseModel, model_validator, Field
 # ============================================================
 
 class Datatype(str, Enum):
+    LOCALIZER = "localizer"
     ANAT = "anat"
     FUNC = "func"
     DWI = "dwi"
@@ -63,7 +64,8 @@ class MTState(str, Enum):
 # ============================================================
 
 BIDS_SCHEMA: dict[Datatype, dict[str, set[str]]] = {
-
+    Datatype.LOCALIZER: {},
+    
     Datatype.ANAT: {
         "T1w": {"acq", "ce", "rec", "run", "part", "echo", "inv"},
         "T2w": {"acq", "run", "part", "echo"},
@@ -71,21 +73,30 @@ BIDS_SCHEMA: dict[Datatype, dict[str, set[str]]] = {
         "PD": {"acq", "run"},
         "T2starw": {"acq", "run", "part", "echo"},
         "SWI": {"acq", "run", "part"},
-        # --- Common Derivatives ---
-        "T1map": {"acq", "run", "echo"},
-        "T2map": {"acq", "run", "echo"},
+        # --- Coarse derived buckets (Ideas v3) ---
+        "anatParamMap": {"acq", "run"},
+        "anatReformat": {"acq", "run"},
+        "anatSegmentation": {"acq", "run"},
+        "anatOtherDerived": {"acq", "run"},
     },
 
     Datatype.FUNC: {
         "bold": {"task", "acq", "run", "echo", "part"},
         "sbref": {"task", "acq", "run"},
+        # --- Coarse derived buckets (Ideas v3) ---
+        "funcPreprocBold": {"acq", "run"},
+        "funcStatMap": {"acq", "run"},
+        "funcTimeseriesSummary": {"acq", "run"},
+        "funcSegmentationOrMask": {"acq", "run"},
+        "funcOtherDerived": {"acq", "run"},
     },
 
     Datatype.DWI: {
         "dwi": {"acq", "dir", "run"},
-        # --- Common Derivatives ---
-        "adc": {"acq", "run"},
-        "fa": {"acq", "run"},
+        # --- Coarse derived buckets (Ideas v3) ---
+        "dwiParamMap": {"acq", "run"},
+        "dwiSegmentationOrMask": {"acq", "run"},
+        "dwiOtherDerived": {"acq", "run"},
     },
 
     Datatype.FMAP: {
@@ -94,6 +105,11 @@ BIDS_SCHEMA: dict[Datatype, dict[str, set[str]]] = {
         "magnitude2": {"run"},
         "epi": {"dir", "run"},
         "fieldmap": {"run"},
+        # --- Coarse derived buckets (Ideas v3) ---
+        "fmapSusceptibilityOrPhaseMap": {"acq", "run"},
+        "fmapReformat": {"acq", "run"},
+        "fmapSegmentationOrMask": {"acq", "run"},
+        "fmapOtherDerived": {"acq", "run"},
     },
 
     Datatype.PERF: {
@@ -101,10 +117,12 @@ BIDS_SCHEMA: dict[Datatype, dict[str, set[str]]] = {
         "m0scan": {"acq", "run"},
         "dsc": {"acq", "run"},
         "dce": {"acq", "run"},
-        # --- Common Derivatives ---
-        "cbf": {"acq", "run"}, 
-        "cbv": {"acq", "run"},
-        "mtt": {"acq", "run"},
+        # --- Coarse derived buckets (Ideas v3) ---
+        "perfCbfLikeMap": {"acq", "run"},
+        "perfCbvLikeMap": {"acq", "run"},
+        "perfTimingMap": {"acq", "run"},
+        "perfSegmentationOrRoi": {"acq", "run"},
+        "perfOtherDerived": {"acq", "run"},
     },
 
     Datatype.UNKNOWN: {},

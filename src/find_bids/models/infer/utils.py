@@ -1,6 +1,49 @@
 from ..extract.series import SeriesFeatures
 
+from dataclasses import dataclass
+
 import math
+from pydantic import BaseModel, ConfigDict
+
+CLIPPING_SCORE_MIN = -15
+CLIPPING_SCORE_MAX = 15
+
+# ---------------------------------------------------------------------------
+# Scoring helpers
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ScoringRule:
+    condition: bool
+    delta: float
+
+def _as_scoring_rule(rule: "ScoringRule | tuple[object, float]") -> ScoringRule:
+    if isinstance(rule, ScoringRule):
+        return rule
+    condition, delta = rule
+    return ScoringRule(condition=bool(condition), delta=float(delta))
+
+def apply_rules(*rules: "ScoringRule | tuple[object, float]", base: float = 0.0) -> float:
+    """Accumulate validated scoring rules and return the total."""
+    score = base
+    for raw_rule in rules:
+        rule = _as_scoring_rule(raw_rule)
+        if rule.condition:
+            score += rule.delta
+    return score
+
+def apply_rules_clipped(*rules: ScoringRule | tuple[object, float], base: float = 0.0) -> float:
+    """Accumulate validated rules and clip the final score to [-15, 15]."""
+    return _clip_score(apply_rules(*rules, base=base))
+
+def flag_true(obj, attr: str) -> bool:
+    """Safely read boolean-like flags exposed as nested objects with `.value`."""
+    field = getattr(obj, attr, None) if obj else None
+    return bool(field and getattr(field, "value", False))
+
+
+def token_matches(tokens: set[str], keywords: set[str]) -> bool:
+    return bool(tokens & keywords)
 
 def collect_tokens(series: SeriesFeatures) -> set[str]:
     """Union of all text tokens from SeriesDescription / ProtocolName / SequenceName."""
@@ -13,11 +56,40 @@ def collect_tokens(series: SeriesFeatures) -> set[str]:
         ):
             if feat and feat.tokens:
                 # tokens are already lowercased by extract_dicom_tokens
-                tokens |= set(feat.tokens.keys())
+                tokens |= feat.tokens.keys()
     return tokens
 
 def get_num_timepoints(series: SeriesFeatures) -> int | None:
     return series.temporal.num_timepoints if series.temporal else None
+
+def _clip_score(score: float) -> float:
+    return max(CLIPPING_SCORE_MIN, min(score, CLIPPING_SCORE_MAX))
+
+def stable_value(field, min_fraction: float = 0.5):
+    """Return a stable scalar value from a feature field, else None."""
+    if not field or field.valid_fraction <= min_fraction or not field.stable:
+        return None
+    return field.value
+
+def feature_gt(obj, attr: str, threshold: float) -> bool:
+    feature = getattr(obj, attr, None) if obj else None
+    return bool(feature and feature.value and feature.value > threshold)
+
+def is_gre_gr(sequence) -> bool:
+    return bool(
+        sequence
+        and sequence.scanning_sequence
+        and sequence.scanning_sequence.value == "GR"
+        and sequence.scanning_sequence.consistency
+        and sequence.scanning_sequence.consistency > 0.7
+    )
+
+def has_multi_echo(series: SeriesFeatures, min_echoes: int = 1) -> bool:
+    return bool(
+        series.multi_echo
+        and series.multi_echo.num_echoes
+        and series.multi_echo.num_echoes > min_echoes
+    )
 
 # def is_epi(series: SeriesFeatures) -> bool:
 #     """
@@ -94,153 +166,120 @@ def get_num_timepoints(series: SeriesFeatures) -> int | None:
 
 #     return score >= 5
 
-def is_epi(series: SeriesFeatures) -> bool:
-    """
-    Vendor-robust EPI detection using DICOM metadata
-    and acquisition physics heuristics.
-    """
+# def is_epi(series: SeriesFeatures) -> bool:
+#     score = 0
 
-    score = 0
+#     seq = series.sequence
+#     temp = series.temporal
+#     enc = series.encoding
 
-    seq = series.sequence
-    temp = series.temporal
-    enc = series.encoding
+#     # ScanningSequence (strongest)
+#     if seq and seq.scanning_sequence and seq.scanning_sequence.value:
+#         val = str(seq.scanning_sequence.value).upper()
 
-    # ---------------------------
-    # ScanningSequence (strongest)
-    # ---------------------------
-    if seq and seq.scanning_sequence and seq.scanning_sequence.value:
-        val = str(seq.scanning_sequence.value).upper()
-
-        if "EP" in val:
-            score += 5
-        elif val == "SE":
-            score -= 3
-        elif val == "GR":
-            score -= 2
+#         if "EP" in val:
+#             score += 5
+#         elif val == "SE":
+#             score -= 3
+#         elif val == "GR":
+#             score -= 2
             
-    if temp and temp.is_3D:
-        score -= 4  # EPI is almost always 2D
+#     if temp and temp.is_3D:
+#         score -= 4  # EPI is almost always 2D
 
-    # ---------------------------
-    # ScanOptions (weak signal)
-    # ---------------------------
-    if seq and seq.scan_options and seq.scan_options.value:
-        val = str(seq.scan_options.value).upper()
-        if "EPI" in val:
-            score += 2
+#     # ScanOptions (weak signal)
+#     if seq and seq.scan_options and seq.scan_options.value:
+#         val = str(seq.scan_options.value).upper()
+#         if "EPI" in val:
+#             score += 2
 
-    # ---------------------------
-    # Echo Train Length
-    # ---------------------------
-    if temp and temp.echo_train_length and temp.echo_train_length.value:
-        if temp.echo_train_length.value >= 10:
-            score += 3
+#     # Echo Train Length
+#     if temp and temp.echo_train_length and temp.echo_train_length.value:
+#         if temp.echo_train_length.value >= 10:
+#             score += 3
 
-    # ---------------------------
-    # Acquisition type
-    # ---------------------------
-    if seq and seq.mr_acquisition_type and seq.mr_acquisition_type.value:
-        if str(seq.mr_acquisition_type.value).upper() == "2D":
-            score += 1
+#     # Acquisition type
+#     if seq and seq.mr_acquisition_type and seq.mr_acquisition_type.value:
+#         if str(seq.mr_acquisition_type.value).upper() == "2D":
+#             score += 1
 
-    # ---------------------------
-    # Temporal structure
-    # ---------------------------
-    n_tp = get_num_timepoints(series)
-    if n_tp and n_tp > 10:
-        score += 2
+#     # Temporal structure
+#     n_tp = get_num_timepoints(series)
+#     if n_tp and n_tp > 10:
+#         score += 2
 
-    # ---------------------------
-    # Phase encoding
-    # ---------------------------
-    if enc and enc.phase_encoding_direction and enc.phase_encoding_direction.value:
-        score += 1
+#     # Phase encoding
+#     if enc and enc.phase_encoding_direction and enc.phase_encoding_direction.value:
+#         score += 1
 
-    # ---------------------------
-    # Slice thickness sanity
-    # ---------------------------
-    if series.spatial and series.spatial.slice_thickness and series.spatial.slice_thickness.value:
-        thickness = series.spatial.slice_thickness.value
-        if 1.0 <= thickness <= 5.0:
-            score += 1
+#     # Slice thickness sanity
+#     if series.spatial and series.spatial.slice_thickness and series.spatial.slice_thickness.value:
+#         thickness = series.spatial.slice_thickness.value
+#         if 1.0 <= thickness <= 5.0:
+#             score += 1
 
-    return score >= 5
+#     return score >= 5
 
-def is_fieldmap_epi(series: SeriesFeatures, tokens: set[str]) -> bool:
-    """
-    Detect EPI fieldmap acquisitions (e.g. topup / SE-EPI).
-    """
+# def is_fieldmap_epi(series: SeriesFeatures, tokens: set[str]) -> bool:
+#     """
+#     Detect EPI fieldmap acquisitions (e.g. topup / SE-EPI).
+#     """
 
-    score = 0
+#     score = 0
 
-    seq = series.sequence
-    temporal = series.temporal
+#     seq = series.sequence
+#     temporal = series.temporal
 
-    # --------------------------------------------------
-    # Must be EPI
-    # --------------------------------------------------
+#     # Must be EPI
+#     if is_epi(series):
+#         score += 4
+#     else:
+#         return False
 
-    if is_epi(series):
-        score += 4
-    else:
-        return False
+#     # Strong textual signals
 
-    # --------------------------------------------------
-    # Strong textual signals
-    # --------------------------------------------------
+#     FMAP_EPI_KEYWORDS = {
+#         "fieldmap",
+#         "topup",
+#         "pepolar",
+#         "sefm",
+#         "spin_echo_fieldmap",
+#         "field_map"
+#     }
 
-    FMAP_EPI_KEYWORDS = {
-        "fieldmap",
-        "topup",
-        "pepolar",
-        "sefm",
-        "spin_echo_fieldmap",
-        "field_map"
-    }
+#     if tokens & FMAP_EPI_KEYWORDS:
+#         score += 5
 
-    if tokens & FMAP_EPI_KEYWORDS:
-        score += 5
+#     # Temporal structure
 
-    # --------------------------------------------------
-    # Temporal structure
-    # --------------------------------------------------
+#     n_tp = temporal.num_timepoints if temporal else None
 
-    n_tp = temporal.num_timepoints if temporal else None
+#     if n_tp is not None:
 
-    if n_tp is not None:
+#         if n_tp <= 3:
+#             score += 3
 
-        if n_tp <= 3:
-            score += 3
+#         elif n_tp <= 10:
+#             score += 1
 
-        elif n_tp <= 10:
-            score += 1
+#         elif n_tp > 50:
+#             score -= 4
 
-        elif n_tp > 50:
-            score -= 4
+#     if seq and seq.scanning_sequence and seq.scanning_sequence.value:
 
-    # --------------------------------------------------
-    # Spin echo EPI (common for fieldmaps)
-    # --------------------------------------------------
+#         val = str(seq.scanning_sequence.value).upper()
 
-    if seq and seq.scanning_sequence and seq.scanning_sequence.value:
+#         if "SE" in val and "EP" in val:
+#             score += 2
 
-        val = str(seq.scanning_sequence.value).upper()
+#     # Negative evidence
+#     if tokens & {"sbref"}:
+#         score -= 4
 
-        if "SE" in val and "EP" in val:
-            score += 2
+#     if tokens & {"bold", "fmri", "task", "rest"}:
+#         score -= 5
 
-    # --------------------------------------------------
-    # Negative evidence
-    # --------------------------------------------------
-
-    if tokens & {"sbref"}:
-        score -= 4
-
-    if tokens & {"bold", "fmri", "task", "rest"}:
-        score -= 5
-
-    return score >= 5
+#     return score >= 5
 
 def softmax(scores: dict[str, float], temperature: float = 1.5) -> dict[str, float]:
     """

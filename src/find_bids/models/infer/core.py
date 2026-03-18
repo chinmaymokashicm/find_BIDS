@@ -190,8 +190,8 @@ class SeriesInference(BaseModel):
     def label(self) -> str:
         datatype = self.inferred_datatype if self.inferred_datatype else "unknown"
         suffix = self.inferred_suffix if self.inferred_suffix else "unknown"
-        derived = "derived" if self.is_derived else ("raw" if self.is_derived == False else "unknown")
-        return f"{datatype}_{suffix}_{derived}"
+        # derived = "derived" if self.is_derived else ("raw" if self.is_derived == False else "unknown")
+        return f"{datatype}_{suffix}"
 
     @property
     def min_confidence(self) -> Optional[float]:
@@ -233,6 +233,7 @@ class DatasetsInference(BaseModel):
     @classmethod
     def from_csv(cls, csv_path: str) -> Self:
         df = pd.read_csv(csv_path)
+        df["is_derived"] = df["is_derived"].map({True: True, False: False, "True": True, "False": False, "true": True, "false": False})
         datasets = []
         for dataset_name, group in df.groupby("dataset"):
             series_inferences = []
@@ -269,8 +270,13 @@ class DatasetsInference(BaseModel):
                     for series_id, series_features in series_dict.items():
                         tokens = collect_tokens(series_features)
                         _, inferred_datatype, datatype_confidence = score_datatype(series=series_features, tokens=tokens)
-                        _, inferred_suffix, suffix_confidence = score_suffix(series=series_features, tokens=tokens, datatype=inferred_datatype)
                         _, is_derived, derived_confidence = score_is_derived(series=series_features, tokens=tokens)
+                        _, inferred_suffix, suffix_confidence = score_suffix(
+                            series=series_features,
+                            tokens=tokens,
+                            datatype=inferred_datatype,
+                            is_derived=is_derived,
+                        )
                         min_confidence = min(datatype_confidence, suffix_confidence, derived_confidence)
                         # series = dataset.search_series_by_id(subject_id, session_id, series_id)
                         series_description = series_features.text.series_description.text if series_features.text and series_features.text.series_description else None

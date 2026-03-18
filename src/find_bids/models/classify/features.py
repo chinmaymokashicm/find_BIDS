@@ -119,7 +119,6 @@ TIER1_FEATURES = [
     "source_image_sequences",
 ]
 
-
 def get_features_from_series(
     features_root: UPath,
     load_existing: bool = True,

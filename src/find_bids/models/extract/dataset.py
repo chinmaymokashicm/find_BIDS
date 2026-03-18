@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 import sqlite3
 from datetime import datetime
 
-from pydantic import BaseModel, field_validator, ConfigDict
+from pydantic import BaseModel, field_validator, ConfigDict, Field
 import pydicom as dicom
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, track
 import numpy as np
@@ -32,25 +32,25 @@ class Series(BaseModel):
 class Session(BaseModel):
     session_id: str
     path: UPath
-    series: Optional[list[Series]] = None
+    series: dict[str, Series] = Field(default_factory=dict)
     bids_session_id: Optional[str] = None
 
 class Subject(BaseModel):
     subject_id: str
-    sessions: Optional[list[Session]] = None
+    sessions: dict[str, Session] = Field(default_factory=dict)
     bids_participant_id: Optional[str] = None
 
 class Dataset(BaseModel):
     dir_root: UPath
     features_root: UPath
     dtype: Literal["DICOM", "Nifti"]
-    subjects: Optional[list[Subject]] = None
+    subjects: dict[str, Subject] = Field(default_factory=dict)
     
-    @property
-    def sorted_subjects(self) -> list[Subject]:
-        if self.subjects is None:
-            return []
-        return sorted(self.subjects, key=lambda s: s.subject_id)
+    # @property
+    # def sorted_subjects(self) -> list[Subject]:
+    #     if self.subjects is None:
+    #         return []
+    #     return sorted(self.subjects.values(), key=lambda s: s.subject_id)
     
     @property
     def csv_export_path(self) -> UPath:
@@ -138,7 +138,7 @@ class Dataset(BaseModel):
         subject_dirs = [d for d in dir_root.iterdir() if d.is_dir()]
         if n_subjects is not None:
             subject_dirs = subject_dirs[:n_subjects]
-        subjects: list[Subject] = []
+        subjects: dict[str, Subject] = {}
         with Progress(
             TextColumn("{task.description}"),
             BarColumn(),
@@ -149,12 +149,12 @@ class Dataset(BaseModel):
 
             for subject_dir in subject_dirs:
                 subject_id = subject_dir.name
+                subjects[subject_id] = Subject(subject_id=subject_id, sessions={})
                 session_dirs = [(d, (d / session_subdir_path)) for d in subject_dir.iterdir() if d.is_dir()]
-                sessions: list[Session] = []
                 for session_dir_without_path_pattern, session_dir in session_dirs:
                     session_id = session_dir_without_path_pattern.name
+                    subjects[subject_id].sessions[session_id] = Session(session_id=session_id, path=session_dir, series={})
                     series_dirs = [(d, (d / series_subdir_path)) for d in session_dir.iterdir() if d.is_dir()]
-                    series_list: list[Series] = []
                     for series_dir_without_path_pattern, series_dir in series_dirs:
                         series_id = series_dir_without_path_pattern.name
                         if dtype == "DICOM":
@@ -163,11 +163,9 @@ class Dataset(BaseModel):
                         elif dtype == "Nifti":
                             if not cls.validate_nifti_dir(series_dir):
                                 continue
-                        series_list.append(Series(series_id=series_id, path=series_dir))
+                        subjects[subject_id].sessions[session_id].series[series_id] = Series(series_id=series_id, path=series_dir)
                         series_count += 1
                         progress.update(task_id, series_count=series_count)
-                    sessions.append(Session(session_id=session_id, path=session_dir, series=series_list))
-                subjects.append(Subject(subject_id=subject_id, sessions=sessions))
                 progress.advance(task_id)
         
         return cls(dir_root=dir_root, features_root=features_root, dtype=dtype, subjects=subjects)
@@ -214,7 +212,7 @@ class Dataset(BaseModel):
         session_dirs = [(d, (d / session_subdir_path)) for d in dir_root.iterdir() if d.is_dir()]
         if n_sessions is not None:
             session_dirs = session_dirs[:n_sessions]
-        subjects: list[Subject] = []
+        subjects: dict[str, Subject] = {}
         with Progress(
             TextColumn("{task.description}"),
             BarColumn(),
@@ -226,8 +224,10 @@ class Dataset(BaseModel):
             for session_dir_without_path_pattern, session_dir in session_dirs:
                 session_id = session_dir_without_path_pattern.name
                 subject_id = "-".join(session_id.split("-")[:2])
+                if subject_id not in subjects:
+                    subjects[subject_id] = Subject(subject_id=subject_id, sessions={})
                 series_dirs = [(d, (d / series_subdir_path)) for d in session_dir.iterdir() if d.is_dir()]
-                series_list: list[Series] = []
+                subjects[subject_id].sessions[session_id] = Session(session_id=session_id, path=session_dir, series={})
                 for series_dir_without_path_pattern, series_dir in series_dirs:
                     series_id = series_dir_without_path_pattern.name
                     if dtype == "DICOM":
@@ -236,10 +236,9 @@ class Dataset(BaseModel):
                     elif dtype == "Nifti":
                         if not cls.validate_nifti_dir(series_dir):
                             continue
-                    series_list.append(Series(series_id=series_id, path=series_dir))
+                    subjects[subject_id].sessions[session_id].series[series_id] = Series(series_id=series_id, path=series_dir)
                     series_count += 1
                     progress.update(task_id, series_count=series_count)
-                subjects.append(Subject(subject_id=subject_id, sessions=[Session(session_id=session_id, path=session_dir, series=series_list)]))
                 progress.advance(task_id)
                 
         return cls(dir_root=dir_root, features_root=features_root, dtype=dtype, subjects=subjects)
@@ -253,10 +252,10 @@ class Dataset(BaseModel):
         if self.subjects is None:
             return
         self.features_root = new_root / self.features_root.relative_to(old_root)
-        for subject in self.subjects:
-            for session in subject.sessions or []:
+        for subject in self.subjects.values():
+            for session in subject.sessions.values() or []:
                 session.path = new_root / session.path.relative_to(old_root)
-                for series in session.series or []:
+                for series in session.series.values() or []:
                     series.path = new_root / series.path.relative_to(old_root)
     
     def generate_bids_ids(self, replace_existing: bool = True) -> None:
@@ -271,13 +270,13 @@ class Dataset(BaseModel):
         if self.subjects is None:
             return
         subject_counter = 1
-        for subject in self.sorted_subjects:
+        for subject in self.subjects.values() or []:
             if not replace_existing and subject.bids_participant_id is not None:
                 continue
             subject.bids_participant_id = f"{subject_counter:04d}"
             subject_counter += 1
             session_counter = 1
-            for session in subject.sessions or []:
+            for session in subject.sessions.values() or []:
                 if not replace_existing and session.bids_session_id is not None:
                     continue
                 session.bids_session_id = f"{session_counter:04d}"
@@ -287,16 +286,26 @@ class Dataset(BaseModel):
         """
         Search for a series in the dataset by its subject ID, session ID, and series ID. Returns the Series object if found, or None if not found.
         """
-        if self.subjects is None:
+        subject = self.subjects.get(subject_id)
+        if subject is None:
             return None
-        for subject in self.subjects:
-            if subject.subject_id == subject_id:
-                for session in subject.sessions or []:
-                    if session.session_id == session_id:
-                        for series in session.series or []:
-                            if series.series_id == series_id:
-                                return series
-        return None
+        session = subject.sessions.get(session_id) if subject.sessions else None
+        if session is None:
+            return None
+        series = session.series.get(series_id) if session.series else None
+        return series
+    
+    def get_series_features_by_id(self, subject_id: str, session_id: str, series_id: str) -> Optional[SeriesFeatures]:
+        """
+        Get the features for a specific series by its subject ID, session ID, and series ID. Returns the SeriesFeatures object if found, or None if not found.
+        """
+        series = self.search_series_by_id(subject_id, session_id, series_id)
+        if series is None:
+            return None
+        if series.path.exists():
+            return SeriesFeatures.from_json(series.path)
+        else:
+            return None
     
     def generate_features(self, conn: Optional[sqlite3.Connection] = None, skip_unavailable: bool = False, sample_subjects: Optional[int] = None) -> dict[str, dict[str, dict[str, SeriesFeatures]]]:
         """
@@ -315,14 +324,14 @@ class Dataset(BaseModel):
         if self.subjects is None:
             return {}
         all_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = {}
-        subjects_to_process = self.subjects if sample_subjects is None else self.subjects[:sample_subjects]
+        subjects_to_process = list(self.subjects.values()) if sample_subjects is None else list(self.subjects.values())[:sample_subjects]
         for subject in track(subjects_to_process):
             if subject.subject_id not in all_features:
                 all_features[subject.subject_id] = {}
-            for session in subject.sessions or []:
+            for session in subject.sessions.values() or []:
                 if session.session_id not in all_features[subject.subject_id]:
                     all_features[subject.subject_id][session.session_id] = {}
-                for series in session.series or []:
+                for series in session.series.values() or []:
                     if series.series_id in all_features[subject.subject_id][session.session_id]:
                         continue
                     features_save_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
@@ -355,16 +364,6 @@ class Dataset(BaseModel):
         Generate features for Nifti series by reading the Nifti files in each series directory and extracting relevant metadata and image statistics. Save the features to the features_root directory.
         """
         raise NotImplementedError("Nifti feature extraction is not yet implemented.")
-        # if self.subjects is None:
-        #     return {}
-        # all_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = {}
-        # subjects_to_process = self.subjects if sample_subjects is None else self.subjects[:sample_subjects]
-        # for subject in subjects_to_process:
-        #     for session in subject.sessions or []:
-        #         for series in session.series or []:
-        #             features = SeriesFeatures.from_nifti_series(series.path)
-        #             features_save_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
-        
         
     def to_json(self) -> dict:
         if self.subjects is None:
@@ -380,9 +379,9 @@ class Dataset(BaseModel):
         if self.subjects is None:
             return
         records: list[dict[str, Any]] = []
-        for subject in self.subjects:
-            for session in subject.sessions or []:
-                for series in session.series or []:
+        for subject in self.subjects.values():
+            for session in subject.sessions.values() or []:
+                for series in session.series.values() or []:
                     features_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
                     if not features_path.exists():
                         if self.dtype == "DICOM":
