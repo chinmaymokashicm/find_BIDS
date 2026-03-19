@@ -153,7 +153,6 @@ def get_features_from_series(
             for session_id, series_dict in sessions.items():
                 for series_id, series_features in series_dict.items():
                     flattened_features: dict = series_features.flatten()
-                    print(f"Flattened features for {dataset.dir_root.name} | subject {subject_id} | session {session_id} | series {series_id}:")
                     row = {
                         "dataset": dataset.dir_root.name,
                         "subject": subject_id,
