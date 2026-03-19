@@ -741,7 +741,18 @@ class DiffusionFeatures(BaseModel):
             
             if b is None: continue
             
-            gradient = tuple(round(float(x), 4) for x in g.split()) if g else None
+            if g:
+                # g may be whitespace-delimited ("0.1 0.2 0.3"), backslash-delimited
+                # ("0.1\0.2\0.3"), or a list/array repr ("[0.1, 0.2, 0.3]").
+                # Normalise to a clean list of floats regardless of format.
+                import re as _re
+                tokens = _re.split(r"[\s,\\\[\]]+", g.strip("[] "))
+                try:
+                    gradient = tuple(round(float(x), 4) for x in tokens if x)
+                except ValueError:
+                    gradient = None
+            else:
+                gradient = None
             vol_key = (b, gradient)
             volume_map[vol_key] = volume_map.get(vol_key, 0) + 1
 

@@ -325,10 +325,7 @@ class Dataset(BaseModel):
             return {}
         all_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = {}
         subjects_to_process = list(self.subjects.values()) if sample_subjects is None else list(self.subjects.values())[:sample_subjects]
-        log_path = self.features_root / "feature_extraction_errors.log"
-        if log_path.exists():
-            log_path.unlink()  # Remove existing log file to start fresh
-        for subject in track(subjects_to_process):
+        for subject in track(subjects_to_process, description="Processing subjects", total=len(subjects_to_process)):
             if subject.subject_id not in all_features:
                 all_features[subject.subject_id] = {}
             for session in subject.sessions.values() or []:
@@ -358,6 +355,7 @@ class Dataset(BaseModel):
                                 #     log_path.parent.mkdir(parents=True, exist_ok=True)
                                 # with log_path.open("a") as log_file:
                                 #     log_file.write(f"{datetime.now()}: Failed to extract features for {series.path}: {str(e)}\n")
+                                print(f"Failed to extract features for {series.path}: {str(e)}. Skipping this series.")
                                 continue
                             else:
                                 raise e
