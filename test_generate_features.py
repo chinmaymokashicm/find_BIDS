@@ -9,7 +9,9 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 
 from rich.progress import track
 
-def process_dataset(dataset_name: str, paths: dict, db_path: Optional[UPath] = None) -> str:
+DB_PATH = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
+
+def process_dataset(dataset_name: str, paths: dict) -> str:
     if paths["subject_level"]:
         dataset = Dataset.from_dir_with_subject_level(
             dir_root=paths["dicom_root"],
@@ -31,12 +33,12 @@ def process_dataset(dataset_name: str, paths: dict, db_path: Optional[UPath] = N
     dataset.to_json()
 
     # Use a thread-local SQLite connection to avoid cross-thread connection usage.
-    # conn = initialize_features_db(db_path)
-    # try:
-    #     dataset.generate_features(skip_unavailable=True, conn=None)
-    # finally:
-    #     pass
-    dataset.generate_features(skip_unavailable=True)
+    conn = initialize_features_db(DB_PATH)
+    try:
+        dataset.generate_features(skip_unavailable=True, conn=conn)
+    finally:
+        conn.close()
+    # dataset.generate_features(skip_unavailable=True)
 
     # dataset.generate_bids_ids(replace_existing=True)
     # dataset.to_json()
@@ -60,7 +62,6 @@ dataset_info: dict[str, dict] = {
     },
     # Add more datasets as needed
 }
-# db_path = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
 
 # Initialize DB schema once before parallel workers start.
 # conn = initialize_features_db(db_path)
