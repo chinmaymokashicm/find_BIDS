@@ -237,19 +237,26 @@ def initialize_features_db(db_path: UPath | str) -> sqlite3.Connection:
             "Run this code directly on the server, or use the local FEATURES_DB_PATH constant."
         )
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    # conn = sqlite3.connect(str(db_path))
+    with db_path.open("a+b") as f:
+        conn = sqlite3.connect(f.name, timeout=30, autocommit=True)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS series_features (
             subject_id TEXT NOT NULL,
             session_id TEXT,
-            series_id TEXT NOT NULL,
+            series_uid TEXT NOT NULL,
             series_description TEXT NOT NULL,
             data JSON NOT NULL,
-            PRIMARY KEY (subject_id, session_id, series_id, series_description)
+            PRIMARY KEY (subject_id, session_id, series_uid, series_description)
         )
     """)
-    conn.commit()
+    
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=30000;")
+    conn.execute("PRAGMA temp_store=MEMORY;")
+    
     return conn
 
 class SeriesNumericFeature(BaseModel):
@@ -1698,7 +1705,7 @@ class SeriesFeatures(BaseModel):
         ]
     
     @classmethod
-    def from_sqlite(cls, conn: sqlite3.Connection, subject_id: Optional[str] = None, session_id: Optional[str] = None, series_id: Optional[str] = None) -> list[Self]:
+    def from_sqlite(cls, conn: sqlite3.Connection, subject_id: Optional[str] = None, session_id: Optional[str] = None, series_uid: Optional[str] = None) -> list[Self]:
         """
         Load series features from the database for a specific subject/session/series combination.
         Returns a list of SeriesFeatures instances or raises ValueError if not found.
@@ -1712,13 +1719,13 @@ class SeriesFeatures(BaseModel):
         if session_id is not None:
             query += " AND session_id = ?"
             params.append(session_id)
-        if series_id is not None:
-            query += " AND series_id = ?"
-            params.append(series_id)
+        if series_uid is not None:
+            query += " AND series_uid = ?"
+            params.append(series_uid)
         cursor.execute(query, params)
         rows = cursor.fetchall()
         if not rows:
-            raise ValueError(f"No features found for subject {subject_id}, session {session_id}, series {series_id}")
+            raise ValueError(f"No features found for subject {subject_id}, session {session_id}, series {series_uid}")
         results = []
         for row in rows:
             data_json = row[0]
@@ -1950,9 +1957,9 @@ class SeriesFeatures(BaseModel):
         """
         # Insert or replace the series features as a JSON blob
         insert_query = """
-INSERT INTO series_features (subject_id, session_id, series_id, series_description, data)
+INSERT INTO series_features (subject_id, session_id, series_uid, series_description, data)
 VALUES (?, ?, ?, ?, ?)
-ON CONFLICT(subject_id, session_id, series_id, series_description) DO UPDATE SET data=excluded.data
+ON CONFLICT(subject_id, session_id, series_uid, series_description) DO UPDATE SET data=excluded.data
 """
         series_description = self.text.series_description.text if self.text and self.text.series_description else None
         conn.execute(insert_query, (subject_id, session_id, self.series_uid, series_description, self.model_dump_json()))

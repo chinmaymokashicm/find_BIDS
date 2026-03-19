@@ -353,9 +353,11 @@ class Dataset(BaseModel):
                             features = SeriesFeatures.from_dicom_series(series.path)
                         except Exception as e:
                             if skip_unavailable:
-                                # Write to a log file for later review
-                                with log_path.open("a") as log_file:
-                                    log_file.write(f"{datetime.now()}: Failed to extract features for {series.path}: {str(e)}\n")
+                                # # Write to a log file for later review
+                                # if not log_path.parent.exists():
+                                #     log_path.parent.mkdir(parents=True, exist_ok=True)
+                                # with log_path.open("a") as log_file:
+                                #     log_file.write(f"{datetime.now()}: Failed to extract features for {series.path}: {str(e)}\n")
                                 continue
                             else:
                                 raise e

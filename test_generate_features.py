@@ -4,12 +4,17 @@ from src.find_bids.models.annotate.core import initialize_annotations_metrics_db
 
 # from pathlib import Path
 from upath import UPath
+import sys
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
 from rich.progress import track
 
 DB_PATH = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
+
+SAMPLE_SUBJECTS: Optional[int] = None  # Set to an integer to limit the number of subjects processed for testing
+if sys.argv and len(sys.argv) > 1 and sys.argv[1] == "test":
+    SAMPLE_SUBJECTS = 5
 
 def process_dataset(dataset_name: str, paths: dict) -> str:
     if paths["subject_level"]:
@@ -18,7 +23,8 @@ def process_dataset(dataset_name: str, paths: dict) -> str:
             features_root=paths["features_root"],
             dtype="DICOM",
             session_subdir_path=paths["session_subdir_path"],
-            series_subdir_path=paths["series_subdir_path"]
+            series_subdir_path=paths["series_subdir_path"],
+            n_subjects=SAMPLE_SUBJECTS
         )
     else:
         dataset = Dataset.from_dir_without_subject_level(
@@ -26,7 +32,8 @@ def process_dataset(dataset_name: str, paths: dict) -> str:
             features_root=paths["features_root"],
             dtype="DICOM",
             session_subdir_path=paths["session_subdir_path"],
-            series_subdir_path=paths["series_subdir_path"]
+            series_subdir_path=paths["series_subdir_path"],
+            n_sessions=SAMPLE_SUBJECTS # Use n_sessions to limit total number of series
         )
 
     dataset.generate_bids_ids(replace_existing=True)
