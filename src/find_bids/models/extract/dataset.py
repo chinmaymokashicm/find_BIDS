@@ -340,10 +340,14 @@ class Dataset(BaseModel):
                     features_save_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
                     if conn is not None:
                         # Check if features for this series already exist in the database
-                        existing_features = SeriesFeatures.from_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id, series_id=series.series_id)
-                        if existing_features is not None:
-                            all_features[subject.subject_id][session.session_id][series.series_id] = existing_features[0]
-                            continue
+                        try:
+                            existing_features = SeriesFeatures.from_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id, series_id=series.series_id)
+                            if existing_features is not None:
+                                all_features[subject.subject_id][session.session_id][series.series_id] = existing_features[0]
+                                continue
+                        except ValueError:
+                            # No existing features found in the database, proceed to generate them
+                            pass
                     if not features_save_path.exists():
                         try:
                             features = SeriesFeatures.from_dicom_series(series.path)
