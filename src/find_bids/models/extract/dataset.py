@@ -325,6 +325,9 @@ class Dataset(BaseModel):
             return {}
         all_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = {}
         subjects_to_process = list(self.subjects.values()) if sample_subjects is None else list(self.subjects.values())[:sample_subjects]
+        log_path = self.features_root / "feature_extraction_errors.log"
+        if log_path.exists():
+            log_path.unlink()  # Remove existing log file to start fresh
         for subject in track(subjects_to_process):
             if subject.subject_id not in all_features:
                 all_features[subject.subject_id] = {}
@@ -346,6 +349,9 @@ class Dataset(BaseModel):
                             features = SeriesFeatures.from_dicom_series(series.path)
                         except Exception as e:
                             if skip_unavailable:
+                                # Write to a log file for later review
+                                with log_path.open("a") as log_file:
+                                    log_file.write(f"{datetime.now()}: Failed to extract features for {series.path}: {str(e)}\n")
                                 continue
                             else:
                                 raise e
