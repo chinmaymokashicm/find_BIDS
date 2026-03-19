@@ -101,8 +101,7 @@ BIDS_SCHEMA: dict[Datatype, dict[str, set[str]]] = {
 
     Datatype.FMAP: {
         "phasediff": {"run"},
-        "magnitude1": {"run"},
-        "magnitude2": {"run"},
+        "magnitude": {"run"},
         "epi": {"dir", "run"},
         "fieldmap": {"run"},
         # --- Coarse derived buckets (Ideas v3) ---

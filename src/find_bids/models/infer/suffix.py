@@ -686,7 +686,7 @@ def score_perfotherderived_perf(series: SeriesFeatures, tokens: set[str]) -> int
     )
     return int(score)
 
-# =====FMAP SUFFIX SCORING (PHASEDIFF, MAGNITUDE1, MAGNITUDE2, EPI, FIELDMAP)====
+# =====FMAP SUFFIX SCORING (PHASEDIFF, MAGNITUDE, EPI, FIELDMAP)====
 
 def score_phasediff_fmap(series: SeriesFeatures, tokens: set[str]) -> float:
     """Score for fmap/phasediff suffix."""
@@ -710,8 +710,8 @@ def score_phasediff_fmap(series: SeriesFeatures, tokens: set[str]) -> float:
     )
 
 
-def score_magnitude1_fmap(series: SeriesFeatures, tokens: set[str]) -> float:
-    """Score for fmap/magnitude1 suffix."""
+def score_magnitude_fmap(series: SeriesFeatures, tokens: set[str]) -> float:
+    """Score for fmap/magnitude suffix."""
     temporal = series.temporal
     echo_numbers = (
         series.multi_echo.echo_numbers
@@ -722,34 +722,10 @@ def score_magnitude1_fmap(series: SeriesFeatures, tokens: set[str]) -> float:
 
     return apply_rules_clipped(
         (flag_true(series.image_type, "is_magnitude"), 5),
-        (echo_numbers and echo_numbers[0] == 1, 2),
+        (echo_numbers and echo_numbers[0] in (1, 2), 2),
         (n_tp is not None and n_tp <= 2, 3),
-        (token_matches(tokens, {"magnitude", "mag", "mag1"}), 2),
+        (token_matches(tokens, {"magnitude", "mag", "mag1", "mag2"}), 2),
         (flag_true(series.image_type, "is_phase"), -4),
-        (token_matches(tokens, {"mag2"}), -2),
-        (echo_numbers and echo_numbers[0] == 2, -2),
-    )
-
-
-def score_magnitude2_fmap(series: SeriesFeatures, tokens: set[str]) -> float:
-    """Score for fmap/magnitude2 suffix."""
-    temporal = series.temporal
-    echo_numbers = (
-        series.multi_echo.echo_numbers
-        if series.multi_echo and series.multi_echo.echo_numbers
-        else None
-    )
-    n_tp = temporal.num_timepoints if temporal else None
-
-    return apply_rules_clipped(
-        (flag_true(series.image_type, "is_magnitude"), 5),
-        (echo_numbers and echo_numbers[0] == 2, 2),
-        (n_tp is not None and n_tp <= 2, 3),
-        (token_matches(tokens, {"mag2"}), 3),
-        (token_matches(tokens, {"magnitude", "mag"}), 1),
-        (flag_true(series.image_type, "is_phase"), -4),
-        (token_matches(tokens, {"mag1"}), -2),
-        (echo_numbers and echo_numbers[0] == 1, -2),
     )
 
 
@@ -958,14 +934,8 @@ def _apply_acquisition_family_guidance(
                 (family_scores["gre"] >= GRE_FAMILY_THRESHOLD, 2),
                 (family_scores["epi"] >= EPI_FAMILY_THRESHOLD, -2),
             )
-        if "magnitude1" in raw_scores:
-            raw_scores["magnitude1"] += apply_rules(
-                (intent_scores["fieldmap"] >= FIELDMAP_INTENT_THRESHOLD, 2),
-                (family_scores["gre"] >= GRE_FAMILY_THRESHOLD, 1),
-                (family_scores["epi"] >= EPI_FAMILY_THRESHOLD, -2),
-            )
-        if "magnitude2" in raw_scores:
-            raw_scores["magnitude2"] += apply_rules(
+        if "magnitude" in raw_scores:
+            raw_scores["magnitude"] += apply_rules(
                 (intent_scores["fieldmap"] >= FIELDMAP_INTENT_THRESHOLD, 2),
                 (family_scores["gre"] >= GRE_FAMILY_THRESHOLD, 1),
                 (family_scores["epi"] >= EPI_FAMILY_THRESHOLD, -2),

@@ -77,8 +77,7 @@ DWI suffixes:
 Fmap suffixes:
 
 - phasediff: Phase-difference fieldmap image. Example: dual-echo phasediff map.
-- magnitude1: First magnitude image from a fieldmap pair. Example: magnitude image at echo 1.
-- magnitude2: Second magnitude image from a fieldmap pair. Example: magnitude image at echo 2.
+- magnitude: Magnitude image associated with field mapping (single merged label for magnitude echoes). Example: magnitude image at echo 1 or echo 2.
 - epi: EPI-based fieldmap/reference image (for example blip-up/blip-down style references). Example: AP/PA spin-echo EPI references.
 - fieldmap: Direct field map image. Example: scanner-generated B0 field map image.
 - fmapSusceptibilityOrPhaseMap: Coarse derived susceptibility/phase-map bucket. Example: unwrapped phase map or voxel-shift-like map.

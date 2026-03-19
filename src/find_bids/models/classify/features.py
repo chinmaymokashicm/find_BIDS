@@ -6,13 +6,9 @@ from upath import UPath
 from typing import Optional
 
 import pandas as pd
+from rich.progress import track
 
 TIER1_FEATURES = [
-    # # core / identifiers (keep for joins, but you can drop later before modeling)
-    # "series_uid",
-    # "study_uid",
-    # "modality",
-    # "series_number",
     "num_instances",
     "num_unique_slices",
     "num_volumes",
@@ -113,10 +109,10 @@ TIER1_FEATURES = [
     "sequence_name",
 
     # acquisition / provenance
-    "acquisition_time",
-    "series_time",
-    "acquisition_order",
-    "source_image_sequences",
+    # "acquisition_time",
+    # "series_time",
+    # "acquisition_order",
+    # "source_image_sequences",
 ]
 
 def get_features_from_series(
@@ -125,7 +121,8 @@ def get_features_from_series(
     save: bool = True,
     sample_subjects: Optional[int] = None,
     rebuild_old_root: Optional[str | UPath] = None,
-    rebuild_new_root: Optional[str | UPath] = None
+    rebuild_new_root: Optional[str | UPath] = None,
+    datasets: Dataset | list[Dataset] | None = None
     ) -> pd.DataFrame:
     index_cols = ["dataset", "subject", "session", "series"]
     if load_existing:
@@ -138,26 +135,27 @@ def get_features_from_series(
         else:
             print(f"No existing features found at {existing_csv_path}, regenerating...")
     rows = []
-    for dataset_name in features_root.iterdir():
-        if not dataset_name.is_dir():
-            continue
-        dataset_json_path: UPath = dataset_name / "dataset.json"
-        if not dataset_json_path.exists():
-            print(f"Warning: No dataset.json found for {dataset_name}, skipping.")
-            continue
-        dataset = Dataset.from_json(dataset_json_path)
+    
+    if isinstance(datasets, Dataset):
+        datasets = [datasets]
+    
+    if not all(isinstance(ds, Dataset) for ds in datasets or []):
+        raise ValueError("All items in datasets must be instances of Dataset.")
+    
+    for dataset in datasets or []:
         if rebuild_old_root and rebuild_new_root:
             dataset.rebuild_paths_with_new_root(old_root=rebuild_old_root, new_root=rebuild_new_root)
         dataset_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = dataset.generate_features(
             skip_unavailable=True,
             sample_subjects=sample_subjects
-            )
-        for subject_id, sessions in dataset_features.items():
+        )
+        for subject_id, sessions in track(dataset_features.items(), description=f"Processing dataset {dataset.dir_root.name}", total=len(dataset_features)):
             for session_id, series_dict in sessions.items():
                 for series_id, series_features in series_dict.items():
                     flattened_features: dict = series_features.flatten()
+                    print(f"Flattened features for {dataset.dir_root.name} | subject {subject_id} | session {session_id} | series {series_id}:")
                     row = {
-                        "dataset": dataset_name.name,
+                        "dataset": dataset.dir_root.name,
                         "subject": subject_id,
                         "session": session_id,
                         "series": series_id,
