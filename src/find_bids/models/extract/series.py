@@ -252,10 +252,10 @@ def initialize_features_db(db_path: UPath | str) -> sqlite3.Connection:
         )
     """)
     
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA synchronous=NORMAL;")
-    conn.execute("PRAGMA busy_timeout=30000;")
-    conn.execute("PRAGMA temp_store=MEMORY;")
+    # conn.execute("PRAGMA journal_mode=WAL;")
+    # conn.execute("PRAGMA synchronous=NORMAL;")
+    # conn.execute("PRAGMA busy_timeout=30000;")
+    # conn.execute("PRAGMA temp_store=MEMORY;")
     
     return conn
 

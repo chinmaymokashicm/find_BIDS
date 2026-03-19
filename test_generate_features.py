@@ -12,10 +12,10 @@ from rich.progress import track
 
 DB_PATH = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
 
-SAMPLE_SUBJECTS: Optional[int] = None  # Set to an integer to limit the number of subjects processed for testing
+SAMPLE_SIZE: Optional[int] = None  # Set to an integer to limit the number of subjects processed for testing
 if sys.argv and len(sys.argv) > 1 and sys.argv[1] == "test":
-    print("Running in test mode: limiting to 5 subjects")
-    SAMPLE_SUBJECTS = 5
+    print("Running in test mode: limiting to 2.")
+    SAMPLE_SIZE = 2
 
 def process_dataset(dataset_name: str, paths: dict) -> str:
     if paths["subject_level"]:
@@ -25,7 +25,7 @@ def process_dataset(dataset_name: str, paths: dict) -> str:
             dtype="DICOM",
             session_subdir_path=paths["session_subdir_path"],
             series_subdir_path=paths["series_subdir_path"],
-            n_subjects=SAMPLE_SUBJECTS
+            n_subjects=SAMPLE_SIZE
         )
     else:
         dataset = Dataset.from_dir_without_subject_level(
@@ -34,7 +34,7 @@ def process_dataset(dataset_name: str, paths: dict) -> str:
             dtype="DICOM",
             session_subdir_path=paths["session_subdir_path"],
             series_subdir_path=paths["series_subdir_path"],
-            n_sessions=SAMPLE_SUBJECTS # Use n_sessions to limit total number of series
+            n_sessions=SAMPLE_SIZE # Use n_sessions to limit total number of series
         )
 
     dataset.generate_bids_ids(replace_existing=True)
