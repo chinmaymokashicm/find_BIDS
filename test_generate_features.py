@@ -14,6 +14,7 @@ DB_PATH = UPath("/rsrch5/home/csi/Quarles_Lab/find_BIDS/features/features.db")
 
 SAMPLE_SUBJECTS: Optional[int] = None  # Set to an integer to limit the number of subjects processed for testing
 if sys.argv and len(sys.argv) > 1 and sys.argv[1] == "test":
+    print("Running in test mode: limiting to 5 subjects")
     SAMPLE_SUBJECTS = 5
 
 def process_dataset(dataset_name: str, paths: dict) -> str:

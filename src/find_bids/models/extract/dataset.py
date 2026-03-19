@@ -341,7 +341,7 @@ class Dataset(BaseModel):
                     if conn is not None:
                         # Check if features for this series already exist in the database
                         try:
-                            existing_features = SeriesFeatures.from_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id, series_id=series.series_id)
+                            existing_features = SeriesFeatures.from_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id, series_uid=series.series_id)
                             if existing_features is not None:
                                 all_features[subject.subject_id][session.session_id][series.series_id] = existing_features[0]
                                 continue
