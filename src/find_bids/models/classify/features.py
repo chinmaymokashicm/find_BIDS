@@ -166,4 +166,10 @@ def get_features_from_series(
     if save:
         with (features_root / "all_series_features.csv").open("w") as f:
             df.to_csv(f, index=True)
+        # Also save the table to a local directory for easy access
+        local_save_path = UPath("all_series_features.csv")
+        if not local_save_path.parent.exists():
+            local_save_path.parent.mkdir(parents=True, exist_ok=True)
+        with local_save_path.open("w") as f:
+            df.to_csv(f, index=True)
     return df

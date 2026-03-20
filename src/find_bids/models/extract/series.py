@@ -134,41 +134,61 @@ def get_diffusion_params(ds: dicom.Dataset) -> tuple[Optional[float], Optional[s
 
     return b, g
 
-def parse_dicom_time(time_str: Optional[str]) -> Optional[float]:
-    if time_str is None:
+def _coerce_dicom_temporal_text(value: Optional[Any]) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, dicom.DataElement):
+        value = value.value
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("ascii", errors="ignore")
+        except Exception:
+            return None
+    if not isinstance(value, str):
+        value = str(value)
+    value = value.replace("\x00", "").strip()
+    return value or None
+
+def parse_dicom_time(time_str: Optional[Any]) -> Optional[float]:
+    time_text = _coerce_dicom_temporal_text(time_str)
+    if time_text is None:
         return None
     try:
-        if "." in time_str:
-            time_str, fractional = time_str.split(".")
+        if "." in time_text:
+            time_text, fractional = time_text.split(".")
             fractional_seconds = float("0." + fractional)
         else:
             fractional_seconds = 0.0
-        hours = int(time_str[0:2]) if len(time_str) >= 2 else 0
-        minutes = int(time_str[2:4]) if len(time_str) >= 4 else 0
-        seconds = int(time_str[4:6]) if len(time_str) >= 6 else 0
+        hours = int(time_text[0:2]) if len(time_text) >= 2 else 0
+        minutes = int(time_text[2:4]) if len(time_text) >= 4 else 0
+        seconds = int(time_text[4:6]) if len(time_text) >= 6 else 0
         total_seconds = hours * 3600 + minutes * 60 + seconds + fractional_seconds
         return total_seconds
     except Exception:
         return None
 
-def parse_dicom_datetime(datetime_str: Optional[str], remove_fractional: bool = True) -> Optional[datetime]:
+def parse_dicom_datetime(datetime_str: Optional[Any], remove_fractional: bool = True) -> Optional[datetime]:
     """Parse DICOM datetime string (format: YYYYMMDDHHMMSS.FFFFFF) into a datetime object"""
-    if datetime_str is None:
+    datetime_text = _coerce_dicom_temporal_text(datetime_str)
+    if datetime_text is None:
         return None
-    if not isinstance(datetime_str, str):
-        raise ValueError(f"Expected a string for datetime parsing, got {type(datetime_str)}")
     try:
         # Remove fractional seconds if present
-        if remove_fractional and "." in datetime_str:
-            datetime_str = datetime_str.split(".")[0]
-            return datetime.strptime(datetime_str, "%Y%m%d%H%M%S")
+        if remove_fractional and "." in datetime_text:
+            datetime_text = datetime_text.split(".")[0]
+            return datetime.strptime(datetime_text, "%Y%m%d%H%M%S")
         else:
-            return datetime.strptime(datetime_str, "%Y%m%d%H%M%S.%f")
+            try:
+                return datetime.strptime(datetime_text, "%Y%m%d%H%M%S.%f")
+            except ValueError:
+                return datetime.strptime(datetime_text, "%Y%m%d%H%M%S")
     except Exception:
         return None
 
-def parse_dicom_date_time(date_str: Optional[str], time_str: Optional[str], remove_fractional: bool = True) -> Optional[datetime]:
+def parse_dicom_date_time(date_str: Optional[Any], time_str: Optional[Any], remove_fractional: bool = True) -> Optional[datetime]:
     """Parse DICOM date (YYYYMMDD) and time (HHMMSS.FFFFFF) strings into a datetime object"""
+    date_str = _coerce_dicom_temporal_text(date_str)
+    time_str = _coerce_dicom_temporal_text(time_str)
     if date_str is None or time_str is None:
         return None
     try:
@@ -176,7 +196,10 @@ def parse_dicom_date_time(date_str: Optional[str], time_str: Optional[str], remo
         if remove_fractional and "." in time_str:
             time_str = time_str.split(".")[0]
         datetime_combined = f"{date_str}{time_str}"
-        return datetime.strptime(datetime_combined, "%Y%m%d%H%M%S")
+        try:
+            return datetime.strptime(datetime_combined, "%Y%m%d%H%M%S")
+        except ValueError:
+            return datetime.strptime(datetime_combined, "%Y%m%d%H%M%S.%f")
     except Exception:
         return None
 
@@ -1600,8 +1623,7 @@ class AcquisitionFeatures(BaseModel):
             for tag in time_tags:
                 time_val = ds.get(tag)
                 if time_val and date_val:
-                    # Combine YYYYMMDD + HHMMSS
-                    return parse_dicom_datetime(f"{date_val}{time_val}")
+                    return parse_dicom_date_time(date_val, time_val)
                     
             return None
         
