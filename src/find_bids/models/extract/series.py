@@ -219,6 +219,24 @@ def multivalue_to_string(value: Optional[Any]) -> Optional[str]:
         return " ".join(str(v) for v in value)
     return str(value)
 
+def coerce_dicom_value_list(value: Optional[Any]) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, dicom.DataElement):
+        value = value.value
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("ascii", errors="ignore")
+        except Exception:
+            return []
+    if isinstance(value, str):
+        return [item.strip() for item in value.split("\\") if item.strip()]
+    if isinstance(value, MultiValue):
+        return list(value)
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
 def dsfloat_to_float(value: Optional[DSfloat]) -> Optional[float]:
     if value is None:
         return None
@@ -466,9 +484,13 @@ class GeometryFeatures(BaseModel):
         # Use a tolerance when comparing ImagePositionPatient values to account for minor variations across slices
         unique_positions = set()
         for ds in datasets:
-            pos = get_tag_value(ds, "ImagePositionPatient")
-            if pos:
-                unique_positions.add(tuple(round(float(x), 3) for x in pos))
+            pos_values = coerce_dicom_value_list(get_tag_value(ds, "ImagePositionPatient"))
+            if len(pos_values) < 3:
+                continue
+            try:
+                unique_positions.add(tuple(round(float(x), 3) for x in pos_values[:3]))
+            except (TypeError, ValueError):
+                continue
         
         num_slices = len(unique_positions) or None
 
@@ -481,15 +503,7 @@ class GeometryFeatures(BaseModel):
                 if ps is None or st in (None, ""):
                     continue
 
-                if isinstance(ps, str):
-                    ps_values = [p.strip() for p in ps.split("\\") if p.strip()]
-                elif isinstance(ps, MultiValue):
-                    ps_values = list(ps)
-                elif isinstance(ps, (list, tuple)):
-                    ps_values = list(ps)
-                else:
-                    continue
-
+                ps_values = coerce_dicom_value_list(ps)
                 if len(ps_values) < 2:
                     continue
 
@@ -1062,15 +1076,12 @@ class SpatialFeatures(BaseModel):
                 if ps is None:
                     return (None, None)
 
-                if isinstance(ps, str):
-                    ps = [p.strip() for p in ps.split("\\") if p.strip()]
-                elif isinstance(ps, MultiValue):
-                    ps = list(ps)
-                elif not isinstance(ps, (list, tuple)):
+                ps_values = coerce_dicom_value_list(ps)
+                if not ps_values:
                     return (None, None)
 
-                x = _to_float_or_none(ps[0]) if len(ps) > 0 else None
-                y = _to_float_or_none(ps[1]) if len(ps) > 1 else None
+                x = _to_float_or_none(ps_values[0]) if len(ps_values) > 0 else None
+                y = _to_float_or_none(ps_values[1]) if len(ps_values) > 1 else None
                 return (x, y)
 
             pairs = [_pixel_spacing_pair(ds) for ds in datasets]
