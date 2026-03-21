@@ -350,14 +350,15 @@ class Dataset(BaseModel):
                         except ValueError:
                             # No existing features found in the database, proceed to generate them
                             pass
-                    if not features_save_path.exists():
+                    
+                    try:
+                        features = SeriesFeatures.from_json(features_save_path)
+                        # print(f"Features for {series.path} already exist at {features_save_path}. Loaded existing features.")
+                    except Exception:
                         try:
                             features = SeriesFeatures.from_dicom_series(series.path)
                         except Exception as e:
                             if skip_unavailable:
-                                # # Write to a log file for later review
-                                # with log_path.open("a") as log_file:
-                                #     log_file.write(f"{datetime.now()}: Failed to extract features for {series.path}: {str(e)}\n")
                                 print(f"Failed to extract features for {series.path}: {str(e)}. Skipping this series.")
                                 traceback.print_exc()
                                 continue
@@ -365,9 +366,7 @@ class Dataset(BaseModel):
                                 raise e
                         features_save_path.parent.mkdir(parents=True, exist_ok=True)
                         features_save_path.write_text(features.model_dump_json(indent=4))
-                    else:
-                        features = SeriesFeatures.from_json(features_save_path)
-                        # print(f"Features for {series.path} already exist at {features_save_path}. Loaded existing features.")
+                    
                     all_features[subject.subject_id][session.session_id][series.series_id] = features
                     if conn is not None:
                         features.to_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id)
