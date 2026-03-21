@@ -1,20 +1,5 @@
 #!/bin/bash
-#BSUB -J find_bids_features
-#BSUB -q medium
-#BSUB -n 4
-#BSUB -M 4000
-#BSUB -W 15:00
-#BSUB -o /rsrch5/home/csi/Quarles_Lab/find_BIDS/logs/find_bids_features.%J.out
-#BSUB -e /rsrch5/home/csi/Quarles_Lab/find_BIDS/logs/find_bids_features.%J.err
-#BSUB -R "span[ptile=4]"
 
-# Exit on error
-set -e
-
-# Load modules if needed (uncomment if required)
-# module load python/3.11
-
-# Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Create logs directory if it doesn't exist
