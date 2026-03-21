@@ -112,6 +112,7 @@ NUMERIC_FEATURES = [
     "num_instances",
     "num_unique_slices",
     "num_volumes",
+    "field_strength",
     "rows",
     "columns",
     "repetition_time",
@@ -160,7 +161,6 @@ BOOLEAN_FEATURES = [
 CATEGORICAL_FEATURES = [
     "manufacturer",
     "model",
-    "field_strength",
     "scanning_sequence",
     "sequence_variant",
     "scan_options",

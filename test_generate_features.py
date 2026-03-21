@@ -4,7 +4,7 @@ from src.find_bids.models.annotate.core import initialize_annotations_metrics_db
 
 # from pathlib import Path
 from upath import UPath
-import sys
+import sys, traceback
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 
@@ -44,6 +44,9 @@ def process_dataset(dataset_name: str, paths: dict) -> str:
     conn = initialize_features_db(DB_PATH)
     try:
         dataset.generate_features(skip_unavailable=True, conn=conn)
+    except Exception as e:
+        print(f"Error processing dataset {dataset_name}: {e}")
+        traceback.print_exc()
     finally:
         conn.close()
     # dataset.generate_features(skip_unavailable=True)

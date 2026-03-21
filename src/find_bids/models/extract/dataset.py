@@ -11,7 +11,7 @@ Series can either be:
 """
 from .series import SeriesFeatures
 
-import os, re, json
+import os, re, json, traceback
 # from pathlib import Path
 from typing import Optional, Iterable, Iterator, Self, Any, Literal
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
@@ -326,9 +326,9 @@ class Dataset(BaseModel):
         all_features: dict[str, dict[str, dict[str, SeriesFeatures]]] = {}
         subjects_to_process = list(self.subjects.values()) if sample_subjects is None else list(self.subjects.values())[:sample_subjects]
         
-        log_path = self.features_root / "feature_extraction_errors.log"
-        if not log_path.parent.exists():
-            log_path.parent.mkdir(parents=True, exist_ok=True)
+        # log_path = self.features_root / "feature_extraction_errors.log"
+        # if not log_path.parent.exists():
+        #     log_path.parent.mkdir(parents=True, exist_ok=True)
         
         for subject in track(subjects_to_process, description="Processing subjects", total=len(subjects_to_process)):
             if subject.subject_id not in all_features:
@@ -356,9 +356,10 @@ class Dataset(BaseModel):
                         except Exception as e:
                             if skip_unavailable:
                                 # # Write to a log file for later review
-                                with log_path.open("a") as log_file:
-                                    log_file.write(f"{datetime.now()}: Failed to extract features for {series.path}: {str(e)}\n")
+                                # with log_path.open("a") as log_file:
+                                #     log_file.write(f"{datetime.now()}: Failed to extract features for {series.path}: {str(e)}\n")
                                 print(f"Failed to extract features for {series.path}: {str(e)}. Skipping this series.")
+                                traceback.print_exc()
                                 continue
                             else:
                                 raise e
@@ -366,6 +367,7 @@ class Dataset(BaseModel):
                         features_save_path.write_text(features.model_dump_json(indent=4))
                     else:
                         features = SeriesFeatures.from_json(features_save_path)
+                        print(f"Features for {series.path} already exist at {features_save_path}. Loaded existing features.")
                     all_features[subject.subject_id][session.session_id][series.series_id] = features
                     if conn is not None:
                         features.to_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id)

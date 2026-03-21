@@ -1,130 +1,207 @@
-"""
-Module for ML classification using manually-checked heuristic scores as training data.
-"""
-from .utils import (
-    TIER1_FEATURES,
-    NUMERIC_FEATURES,
-    CATEGORICAL_FEATURES,
-    BOOLEAN_FEATURES,
-    TEXT_FEATURES,
-    safe_divide
-    )
+"""Core ML pipeline workflow functions for merging labels and creating train/val/test splits."""
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
-def split_voxel_size(df: pd.DataFrame) -> pd.DataFrame:
-    def parse(v):
-        if pd.isna(v):
-            return [np.nan, np.nan, np.nan]
-        parts = str(v).split("\\")
-        if len(parts) != 3:
-            return [np.nan, np.nan, np.nan]
-        return list(map(float, parts))
+from .engineer import MERGE_KEY_COLUMNS, _series_dataframe_with_keys, prepare_features_for_modeling
 
-    vox = df["voxel_size"].apply(parse)
+NON_FEATURE_COLUMNS = {
+    "dataset",
+    "subject",
+    "session",
+    "series",
+    "subject_id",
+    "session_id",
+    "series_id",
+    "series_description",
+    "inferred_datatype",
+    "datatype_confidence",
+    "inferred_suffix",
+    "suffix_confidence",
+    "is_derived",
+    "derived_confidence",
+    "label",
+    "min_confidence",
+    "label_confidence",
+    "confidence_tier",
+    "split",
+}
 
-    df["voxel_x"] = vox.str[0]
-    df["voxel_y"] = vox.str[1]
-    df["voxel_z"] = vox.str[2]
 
-    return df
+def merge_with_heuristic_scores(
+    series_features_df: pd.DataFrame,
+    heuristic_scores_df: pd.DataFrame,
+    preprocess_series_features: bool = True,
+) -> pd.DataFrame:
+    """Merge series features with heuristic labels on canonical dataset/subject/session/series keys.
 
-def voxel_volume(df: pd.DataFrame) -> None:
-    if not all(col in df.columns for col in ["voxel_x", "voxel_y", "voxel_z"]):
-        raise ValueError("DataFrame must contain 'voxel_x', 'voxel_y', and 'voxel_z' columns.")
-    df["voxel_volume"] = df["voxel_x"] * df["voxel_y"] * df["voxel_z"]
+    Optionally preprocesses feature columns first and deduplicates heuristic rows by best min_confidence.
+    """
+    if preprocess_series_features:
+        series_df = prepare_features_for_modeling(series_features_df)
+    else:
+        series_df = _series_dataframe_with_keys(series_features_df)
 
-def slice_gap_ratio(df: pd.DataFrame) -> None:
-    if "spacing_between_slices" not in df.columns or "slice_thickness" not in df.columns:
-        raise ValueError("DataFrame must contain 'spacing_between_slices' and 'slice_thickness' columns.")
-    df["slice_gap_ratio"] = safe_divide(df["spacing_between_slices"], df["slice_thickness"])
+    heuristics_df = heuristic_scores_df.copy()
+    if isinstance(heuristics_df.index, pd.MultiIndex):
+        heuristics_df = heuristics_df.reset_index()
+    elif heuristics_df.index.name:
+        heuristics_df = heuristics_df.reset_index()
 
-def matrix_area(df: pd.DataFrame) -> None:
-    if "rows" not in df.columns or "columns" not in df.columns:
-        raise ValueError("DataFrame must contain 'rows' and 'columns' columns.")
-    df["matrix_area"] = df["rows"] * df["columns"]
+    missing_keys = [k for k in MERGE_KEY_COLUMNS if k not in series_df.columns or k not in heuristics_df.columns]
+    if missing_keys:
+        raise ValueError(f"Missing merge key columns: {missing_keys}")
 
-def volumes_per_second(df: pd.DataFrame) -> None:
-    if "num_volumes" not in df.columns or "repetition_time" not in df.columns:
-        raise ValueError("DataFrame must contain 'num_volumes' and 'repetition_time' columns.")
-    df["volumes_per_second"] = df["num_volumes"] / (df["repetition_time"] / 1000)
+    if "min_confidence" in heuristics_df.columns:
+        heuristics_df = heuristics_df.sort_values("min_confidence", ascending=False)
+    heuristics_df = heuristics_df.drop_duplicates(subset=MERGE_KEY_COLUMNS, keep="first")
 
-def scan_duration_seconds(df: pd.DataFrame) -> None:
-    if "num_volumes" not in df.columns or "repetition_time" not in df.columns:
-        raise ValueError("DataFrame must contain 'num_volumes' and 'repetition_time' columns.")
-    df["scan_duration_seconds"] = (df["num_volumes"] * df["repetition_time"]) / 1000
+    return series_df.merge(heuristics_df, on=MERGE_KEY_COLUMNS, how="inner")
 
-def diffusion_volume_fraction(df: pd.DataFrame) -> None:
-    if "num_diffusion_volumes" not in df.columns or "num_volumes" not in df.columns:
-        raise ValueError("DataFrame must contain 'num_diffusion_volumes' and 'num_volumes' columns.")
-    df["diffusion_volume_fraction"] = df["num_diffusion_volumes"] / df["num_volumes"]
 
-def b0_volume_fraction(df: pd.DataFrame) -> None:
-    if "num_b0" not in df.columns or "num_volumes" not in df.columns:
-        raise ValueError("DataFrame must contain 'num_b0' and 'num_volumes' columns.")
-    df["b0_volume_fraction"] = df["num_b0"] / df["num_volumes"]
+def assign_confidence_tier(
+    df: pd.DataFrame,
+    high_threshold: float = 0.9,
+    medium_threshold: float = 0.6,
+) -> pd.DataFrame:
+    """Compute label_confidence from datatype and suffix confidence, then assign low/medium/high tiers.
 
-def echo_train_efficiency(df: pd.DataFrame) -> None:
-    if "echo_train_length" not in df.columns or "num_volumes" not in df.columns:
-        raise ValueError("DataFrame must contain 'echo_train_length' and 'num_volumes' columns.")
-    df["echo_train_efficiency"] = df["echo_train_length"] / df["num_volumes"]
+    Tiering intentionally excludes derived confidence.
+    """
+    result = df.copy()
+    if "datatype_confidence" not in result.columns or "suffix_confidence" not in result.columns:
+        raise ValueError("DataFrame must contain 'datatype_confidence' and 'suffix_confidence'.")
 
-def bvals_max(df: pd.DataFrame) -> None:
-    if "b_values" not in df.columns:
-        raise ValueError("DataFrame must contain 'b_values' column.")
-    def parse_bvals(bvals):
-        if pd.isna(bvals):
-            return np.nan
-        try:
-            bvals_list = list(map(float, str(bvals).split("\\")))
-            return max(bvals_list)
-        except Exception:
-            return np.nan
-    df["bvals_max"] = df["b_values"].apply(parse_bvals)
-            
-def tr_te_ratio(df: pd.DataFrame) -> None:
-    if "repetition_time" not in df.columns or "echo_time" not in df.columns:
-        raise ValueError("DataFrame must contain 'repetition_time' and 'echo_time' columns.")
-    df["tr_te_ratio"] = safe_divide(df["repetition_time"], df["echo_time"])
+    datatype_conf = pd.to_numeric(result["datatype_confidence"], errors="coerce")
+    suffix_conf = pd.to_numeric(result["suffix_confidence"], errors="coerce")
 
-def voxel_anisotropy(df: pd.DataFrame) -> None:
-    """Calculate voxel anisotropy as the coefficient of variation of the voxel dimensions."""
-    if "voxel_x" not in df.columns or "voxel_y" not in df.columns or "voxel_z" not in df.columns:
-        raise ValueError("DataFrame must contain 'voxel_x', 'voxel_y', and 'voxel_z' columns.")
-    df["voxel_anisotropy"] = df[["voxel_x", "voxel_y", "voxel_z"]].std(axis=1) / df[["voxel_x", "voxel_y", "voxel_z"]].mean(axis=1)
-    
-def slice_per_second(df: pd.DataFrame) -> None:
-    if "num_slices" not in df.columns or "repetition_time" not in df.columns:
-        raise ValueError("DataFrame must contain 'num_slices' and 'repetition_time' columns.")
-    df["slices_per_second"] = safe_divide(df["num_slices"], df["repetition_time"] / 1000)
-    
-def add_log_features(df: pd.DataFrame) -> None:
-    for col in [
-        "repetition_time",
-        "echo_time",
-        "voxel_volume",
-        "scan_duration_seconds",
-    ]:
-        if col in df.columns:
-            df[f"log_{col}"] = np.log1p(df[col])
+    combined_conf = pd.concat([datatype_conf, suffix_conf], axis=1).min(axis=1, skipna=True)
+    result["label_confidence"] = combined_conf
 
-def add_missing_indicators(df: pd.DataFrame) -> None:
-    for col in NUMERIC_FEATURES:
-        if col in df.columns:
-            df[f"{col}_missing"] = df[col].isna().astype(int)
-    
-def prepare_features_for_modeling(df: pd.DataFrame) -> pd.DataFrame:
-    df = split_voxel_size(df)
-    voxel_volume(df)
-    slice_gap_ratio(df)
-    matrix_area(df)
-    volumes_per_second(df)
-    scan_duration_seconds(df)
-    diffusion_volume_fraction(df)
-    b0_volume_fraction(df)
-    echo_train_efficiency(df)
-    bvals_max(df)
-    tr_te_ratio(df)
-    add_log_features(df)
-    return df
+    tiers = np.where(
+        combined_conf >= high_threshold,
+        "high",
+        np.where(combined_conf >= medium_threshold, "medium", "low"),
+    )
+    result["confidence_tier"] = pd.Categorical(tiers, categories=["low", "medium", "high"], ordered=True)
+    return result
+
+
+def assign_random_train_val_test_splits(
+    df: pd.DataFrame,
+    train_fraction: float = 0.7,
+    val_fraction: float = 0.15,
+    test_fraction: float = 0.15,
+    random_state: int = 42,
+    stratify_columns: list[str] | None = None,
+) -> pd.DataFrame:
+    """Assign reproducible random train/val/test labels, with optional stratification.
+
+    Split fractions must sum to 1.0 and the resulting split column is returned as categorical.
+    """
+    total = train_fraction + val_fraction + test_fraction
+    if not np.isclose(total, 1.0):
+        raise ValueError("train_fraction + val_fraction + test_fraction must equal 1.0")
+
+    result = df.copy()
+    result["split"] = ""
+
+    if stratify_columns is None:
+        stratify_columns = ["confidence_tier"] if "confidence_tier" in result.columns else []
+
+    for col in stratify_columns:
+        if col not in result.columns:
+            raise ValueError(f"Stratification column '{col}' not found in DataFrame.")
+
+    rng = np.random.default_rng(random_state)
+    if stratify_columns:
+        grouped = result.groupby(stratify_columns, dropna=False).groups.values()
+    else:
+        grouped = [result.index.to_numpy()]
+
+    for group_idx in grouped:
+        group_idx = np.array(group_idx)
+        shuffled = rng.permutation(group_idx)
+        n = len(shuffled)
+        n_train = int(round(n * train_fraction))
+        n_val = int(round(n * val_fraction))
+        n_train = min(n_train, n)
+        n_val = min(n_val, max(0, n - n_train))
+        n_test = n - n_train - n_val
+
+        train_idx = shuffled[:n_train]
+        val_idx = shuffled[n_train:n_train + n_val]
+        test_idx = shuffled[n_train + n_val:n_train + n_val + n_test]
+
+        result.loc[train_idx, "split"] = "train"
+        result.loc[val_idx, "split"] = "val"
+        result.loc[test_idx, "split"] = "test"
+
+    result["split"] = pd.Categorical(result["split"], categories=["train", "val", "test"], ordered=False)
+    return result
+
+
+def prepare_train_val_test_sets(
+    series_features_df: pd.DataFrame,
+    heuristic_scores_df: pd.DataFrame,
+    random_state: int = 42,
+    train_fraction: float = 0.7,
+    val_fraction: float = 0.15,
+    test_fraction: float = 0.15,
+    high_conf_threshold: float = 0.9,
+    medium_conf_threshold: float = 0.6,
+) -> dict[str, pd.DataFrame]:
+    """Build merged labeled data, assign confidence tiers, and generate train/val/test subsets.
+
+    Returns a dictionary containing the full merged table and each split as separate DataFrames.
+    """
+    merged = merge_with_heuristic_scores(
+        series_features_df=series_features_df,
+        heuristic_scores_df=heuristic_scores_df,
+        preprocess_series_features=True,
+    )
+
+    merged = assign_confidence_tier(
+        merged,
+        high_threshold=high_conf_threshold,
+        medium_threshold=medium_conf_threshold,
+    )
+
+    merged = assign_random_train_val_test_splits(
+        merged,
+        train_fraction=train_fraction,
+        val_fraction=val_fraction,
+        test_fraction=test_fraction,
+        random_state=random_state,
+        stratify_columns=["confidence_tier"],
+    )
+
+    return {
+        "all": merged,
+        "train": merged[merged["split"] == "train"].copy(),
+        "val": merged[merged["split"] == "val"].copy(),
+        "test": merged[merged["split"] == "test"].copy(),
+    }
+
+
+def split_features_and_targets(
+    df: pd.DataFrame,
+    target_columns: list[str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split a labeled DataFrame into feature matrix X and target DataFrame y.
+
+    Known metadata and leakage-prone label columns are removed from X.
+    """
+    if target_columns is None:
+        target_columns = ["inferred_datatype", "inferred_suffix"]
+
+    missing_targets = [col for col in target_columns if col not in df.columns]
+    if missing_targets:
+        raise ValueError(f"Missing target columns: {missing_targets}")
+
+    y = df[target_columns].copy()
+    drop_cols = set(NON_FEATURE_COLUMNS)
+    drop_cols.update(target_columns)
+    X = df.drop(columns=[c for c in drop_cols if c in df.columns])
+    return X, y
