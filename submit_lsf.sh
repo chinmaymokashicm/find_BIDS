@@ -4,8 +4,8 @@
 #BSUB -n 8
 #BSUB -M 16000
 #BSUB -W 12:00
-#BSUB -o logs/find_bids_features.%J.out
-#BSUB -e logs/find_bids_features.%J.err
+#BSUB -o /rsrch5/home/csi/Quarles_Lab/find_BIDS/logs/find_bids_features.%J.out
+#BSUB -e /rsrch5/home/csi/Quarles_Lab/find_BIDS/logs/find_bids_features.%J.err
 #BSUB -R "span[ptile=8]"
 
 # Exit on error
