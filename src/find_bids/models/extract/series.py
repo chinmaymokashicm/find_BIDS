@@ -2000,7 +2000,11 @@ class SeriesFeatures(BaseModel):
     def from_json(cls, json_path: str | UPath) -> Self:
         if isinstance(json_path, str):
             json_path = UPath(json_path)
+        if not json_path.exists():
+            raise ValueError(f"JSON file {json_path} not found")
         with json_path.open("r") as f:
+            if json_path.stat().st_size == 0:
+                raise ValueError(f"JSON file {json_path} is empty")
             data = json.load(f)
         return cls.model_validate(data)
     

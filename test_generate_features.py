@@ -41,18 +41,21 @@ def process_dataset(dataset_name: str, paths: dict) -> str:
     dataset.to_json()
 
     # Use a thread-local SQLite connection to avoid cross-thread connection usage.
-    conn = initialize_features_db(DB_PATH)
-    try:
-        dataset.generate_features(skip_unavailable=True, conn=conn)
-    except Exception as e:
-        print(f"Error processing dataset {dataset_name}: {e}")
-        traceback.print_exc()
-    finally:
-        conn.close()
+    # conn = initialize_features_db(DB_PATH)
+    # try:
+    #     dataset.generate_features(skip_unavailable=True, conn=conn)
+    # except Exception as e:
+    #     print(f"Error processing dataset {dataset_name}: {e}")
+    #     traceback.print_exc()
+    # finally:
+    #     conn.close()
     # dataset.generate_features(skip_unavailable=True)
 
     # dataset.generate_bids_ids(replace_existing=True)
     # dataset.to_json()
+    
+    dataset.generate_features(skip_unavailable=True)
+    
     return dataset_name
 
 # Generate features for multiple datasets and merge into a single table

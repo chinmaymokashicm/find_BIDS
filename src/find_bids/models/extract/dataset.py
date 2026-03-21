@@ -367,7 +367,7 @@ class Dataset(BaseModel):
                         features_save_path.write_text(features.model_dump_json(indent=4))
                     else:
                         features = SeriesFeatures.from_json(features_save_path)
-                        print(f"Features for {series.path} already exist at {features_save_path}. Loaded existing features.")
+                        # print(f"Features for {series.path} already exist at {features_save_path}. Loaded existing features.")
                     all_features[subject.subject_id][session.session_id][series.series_id] = features
                     if conn is not None:
                         features.to_sqlite(conn, subject_id=subject.subject_id, session_id=session.session_id)
@@ -416,7 +416,8 @@ class Dataset(BaseModel):
                     }
                     records.append(record)
         df = pd.DataFrame(records)
-        df.to_csv(self.csv_export_path, index=False) # type: ignore
+        with self.csv_export_path.open("w") as f:
+            df.to_csv(f, index=False)
     
     def merge_features_tables(self, other_datasets: list[Self], save_path: str | UPath) -> None:
         """
