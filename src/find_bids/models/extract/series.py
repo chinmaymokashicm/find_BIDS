@@ -785,7 +785,8 @@ class DiffusionFeatures(BaseModel):
                 import re as _re
                 tokens = _re.split(r"[\s,\\\[\]]+", g.strip("[] "))
                 try:
-                    gradient = tuple(round(float(x), 4) for x in tokens if x)
+                    gradient_values = [round(float(x), 4) for x in tokens if x]
+                    gradient = tuple(gradient_values[:3]) if len(gradient_values) >= 3 else None
                 except ValueError:
                     gradient = None
             else:
@@ -807,11 +808,15 @@ class DiffusionFeatures(BaseModel):
 
         bvals = [b for (b, _) in volume_map.keys()]
         gradients = {g for (b, g) in volume_map.keys() if b > 0 and g is not None}
+        num_diffusion_volumes = sum(volume_map.values())
+        num_b0_volumes = sum(
+            count for (b, _), count in volume_map.items() if b == 0
+        )
 
         return cls(
             b_values=sorted(set(bvals)),
-            num_b0=sum(1 for b in bvals if b == 0),
-            num_diffusion_volumes=len(volume_map),
+            num_b0=num_b0_volumes,
+            num_diffusion_volumes=num_diffusion_volumes,
             num_diffusion_directions=len(gradients) if gradients else None,
             has_diffusion=has_diffusion,
         )
@@ -1149,72 +1154,99 @@ class EncodingFeatures(BaseModel):
     @classmethod
     def from_datasets(cls, datasets: Iterable[dicom.Dataset]) -> Self:
         datasets = list(datasets)
+
+        # (0x0018,0x1312) InPlanePhaseEncodingDirection — standard, ROW/COL
         phase_encoding_direction = SeriesCategoricalFeature.from_values(
             get_tag_value(ds, "InPlanePhaseEncodingDirection", None) for ds in datasets
         )
+
+        # PhaseEncodingAxis is not in the standard pydicom dictionary.
+        # Derive axis (ROW/COL) from InPlanePhaseEncodingDirection as the reliable fallback.
+        def _phase_axis(ds: dicom.Dataset) -> Optional[str]:
+            v = get_tag_value(ds, "InPlanePhaseEncodingDirection", None)
+            if v is None:
+                return None
+            v = str(v).strip().upper()
+            if v in ("ROW", "COL"):
+                return v
+            return None
+
         phase_encoding_axis = SeriesCategoricalFeature.from_values(
-            get_tag_value(ds, "PhaseEncodingAxis", None) for ds in datasets
-        )
-        echo_spacing = SeriesNumericFeature.from_values(
-            get_tag_value(ds, "EchoSpacing", None) for ds in datasets
-        )
-        phase_encoding_polarity = SeriesCategoricalFeature.from_values(
-            get_tag_value(ds, "PhaseEncodingDirection", None)  # Siemens private tag
-            for ds in datasets
+            _phase_axis(ds) for ds in datasets
         )
 
-        
-        # Robust EPI detection (multi-vendor)
-        is_epi_flags = []
-        for ds in datasets:
-            seq_name = (get_tag_value(ds, "SequenceName", "") or "").lower()
-            scanning_seq = normalize_category(get_tag_value(ds, "ScanningSequence", None))
-            seq_variant = normalize_category(get_tag_value(ds, "SequenceVariant", None))
-            vendor = normalize_category(get_tag_value(ds, "Manufacturer", None))
-            if vendor is None:
-                vendor = "N/A"
-            
-        #     # Vendor-agnostic EPI signals
-        #     is_epi_seq = (
-        #         "ep" in seq_name or                    # ep2d, ep3d, epi, ep_bold, etc.
-        #         "echo planar" in seq_name or           # full name
-        #         scanning_seq == "ep" or                # DICOM standard
-        #         "epi" in seq_name                      # generic
-        #     )
-            
-        #     # Vendor-specific patterns (fallback)
-        #     vendor_specific = (
-        #         ("ep2d" in seq_name) or                # Siemens
-        #         ("ep" in seq_name and "ge" in vendor.lower()) or  # GE
-        #         ("epifmri" in seq_name) or             # Philips common
-        #         ("ep" in seq_name and "philips" in vendor.lower())
-        #     )
-            
-        #     is_epi_flags.append(is_epi_seq or vendor_specific)
-        
-        # is_epi = SeriesBooleanFeature.from_values(is_epi_flags)
-        
+        # EchoSpacing is a private/vendor tag — not in the standard dictionary.
+        # Siemens: (0x0019,0x1028); GE: (0x0043,0x102c); Philips: (0x2001,0x1013)
+        def _echo_spacing(ds: dicom.Dataset) -> Optional[float]:
+            v = (
+                get_tag_value(ds, (0x0019, 0x1028), None)   # Siemens
+                or get_tag_value(ds, (0x0043, 0x102c), None) # GE
+                or get_tag_value(ds, (0x2001, 0x1013), None) # Philips
+            )
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        echo_spacing = SeriesNumericFeature.from_values(
+            _echo_spacing(ds) for ds in datasets
+        )
+
+        # Phase encoding polarity (sign/direction of PE): not a standard keyword.
+        # Siemens CSA: (0x0051,0x100e) encodes e.g. "COL+" / "ROW-"
+        # Also check (0x0018,0x9034) PhaseEncodingDirectionPositive (enhanced MR)
+        def _pe_polarity(ds: dicom.Dataset) -> Optional[str]:
+            v = get_tag_value(ds, (0x0051, 0x100e), None)  # Siemens CSA
+            if v is None:
+                v = get_tag_value(ds, (0x0018, 0x9034), None)  # Enhanced MR
+            if v is None:
+                return None
+            if isinstance(v, bytes):
+                try:
+                    v = v.decode("ascii", errors="ignore")
+                except Exception:
+                    return None
+            return str(v).strip() or None
+
+        phase_encoding_polarity = SeriesCategoricalFeature.from_values(
+            _pe_polarity(ds) for ds in datasets
+        )
+
+        # MultibandAccelerationFactor is also vendor-private.
+        # Siemens: (0x0019,0x1029); GE: (0x0021,0x105a); also check (0x0093,0x1089) Band Stop
+        def _multiband(ds: dicom.Dataset) -> Optional[float]:
+            v = (
+                get_tag_value(ds, (0x0019, 0x1029), None)   # Siemens
+                or get_tag_value(ds, (0x0021, 0x105a), None) # GE
+            )
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        multiband_factor = SeriesNumericFeature.from_values(
+            _multiband(ds) for ds in datasets
+        )
+
         parallel_reduction_factor = SeriesNumericFeature.from_values(
             get_tag_value(ds, "ParallelReductionFactorInPlane", None)
             for ds in datasets
         )
-        
+
         parallel_reduction_factor_out_of_plane = SeriesNumericFeature.from_values(
             get_tag_value(ds, "ParallelReductionFactorOutOfPlane", None)
             for ds in datasets
         )
 
-        multiband_factor = SeriesNumericFeature.from_values(
-            get_tag_value(ds, "MultibandAccelerationFactor", None)
-            for ds in datasets
-        )
-        
         return cls(
             phase_encoding_direction=phase_encoding_direction,
             phase_encoding_axis=phase_encoding_axis,
             phase_encoding_polarity=phase_encoding_polarity,
             echo_spacing=echo_spacing,
-            # is_epi=is_epi,
             parallel_reduction_factor_in_plane=parallel_reduction_factor,
             parallel_reduction_factor_out_of_plane=parallel_reduction_factor_out_of_plane,
             multiband_factor=multiband_factor,
@@ -1258,8 +1290,15 @@ class ContrastFeatures(BaseModel):
         contrast_agent = SeriesCategoricalFeature.from_values(
             get_tag_value(ds, "ContrastBolusAgent", None) for ds in datasets
         )
+
+        def _contrast_injection_time_seconds(ds: dicom.Dataset) -> Optional[float]:
+            value = get_tag_value(ds, "ContrastBolusInjectionTime", None)
+            if value is None:
+                value = get_tag_value(ds, "ContrastBolusStartTime", None)
+            return parse_dicom_time(value)
+
         injection_time = SeriesNumericFeature.from_values(
-            get_tag_value(ds, "ContrastBolusInjectionTime", None) for ds in datasets
+            _contrast_injection_time_seconds(ds) for ds in datasets
         )
         # Placeholder logic for signal intensity shift; would need to analyze pixel data across instances to determine this properly
         signal_intensity_shift = None #* Future implementation: Analyze pixel intensity changes across timepoints to infer contrast enhancement patterns, which can be a strong indicator of contrast usage even when metadata is incomplete or inconsistent.

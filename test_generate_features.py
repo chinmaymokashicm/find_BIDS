@@ -76,7 +76,7 @@ dataset_info: dict[str, dict] = {
 # conn.close()
 
 futures = {}
-with ThreadPoolExecutor() as executor:
+with ThreadPoolExecutor(max_workers=4) as executor:
     for dataset_name, paths in dataset_info.items():
         # future = executor.submit(process_dataset, dataset_name, paths, db_path)
         future = executor.submit(process_dataset, dataset_name, paths)

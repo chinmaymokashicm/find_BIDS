@@ -303,7 +303,7 @@ def score_fmap(series: SeriesFeatures, tokens: set[str]) -> float:
         (token_matches(tokens, FMAP_KEYWORDS), 6),
         (num_echoes is not None and num_echoes > 2, 4),
         (epi and series.num_volumes is not None and series.num_volumes <= 10, 3), # EPI fieldmaps often have multiple volumes but still a low number
-        (encoding and encoding.phase_encoding_direction and encoding.phase_encoding_direction.value in ("AP", "PA"), 2), # Fieldmaps often have phase encoding in AP/PA direction
+        (encoding and encoding.phase_encoding_direction and encoding.phase_encoding_direction.value is not None, 2), # Fieldmaps typically populate phase encoding direction
         
         # Negative signals for fieldmaps
         (token_matches(tokens, LOCALIZER_KEYWORDS), -5),

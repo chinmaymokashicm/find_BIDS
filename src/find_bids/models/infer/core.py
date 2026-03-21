@@ -177,7 +177,7 @@ class SeriesInference(BaseModel):
     """Data class representing the inferred BIDS labels for a single series, along with confidence scores."""
     subject_id: str
     session_id: str
-    series_id: str
+    series_uid: str
     series_description: Optional[str]
     inferred_datatype: Optional[str]
     datatype_confidence: Optional[float]
@@ -200,6 +200,30 @@ class SeriesInference(BaseModel):
             return None
         return min(confidences)
     
+    @classmethod
+    def from_series_features(cls, series: SeriesFeatures, subject_id: str, session_id: str, series_uid: str) -> Self:
+        tokens = collect_tokens(series)
+        _, inferred_datatype, datatype_confidence = score_datatype(series=series, tokens=tokens)
+        _, is_derived, derived_confidence = score_is_derived(series=series, tokens=tokens)
+        _, inferred_suffix, suffix_confidence = score_suffix(
+            series=series,
+            tokens=tokens,
+            datatype=inferred_datatype,
+            is_derived=is_derived,
+        )
+        return cls(
+            subject_id=subject_id,
+            session_id=session_id,
+            series_uid=series_uid,
+            series_description=series.text.series_description.text if series.text and series.text.series_description else None,
+            inferred_datatype=inferred_datatype,
+            datatype_confidence=datatype_confidence,
+            inferred_suffix=inferred_suffix,
+            suffix_confidence=suffix_confidence,
+            is_derived=is_derived,
+            derived_confidence=derived_confidence
+        )
+    
 class DatasetInference(BaseModel):
     """Data class representing the inferred BIDS labels for all series within a dataset."""
     dataset: str
@@ -212,7 +236,7 @@ class DatasetInference(BaseModel):
                 "dataset": self.dataset,
                 "subject_id": si.subject_id,
                 "session_id": si.session_id,
-                "series_id": si.series_id,
+                "series_id": si.series_uid,
                 "series_description": si.series_description,
                 "inferred_datatype": si.inferred_datatype,
                 "datatype_confidence": si.datatype_confidence,
@@ -241,7 +265,7 @@ class DatasetsInference(BaseModel):
                 si = SeriesInference(
                     subject_id=row["subject_id"],
                     session_id=row["session_id"],
-                    series_id=row["series_id"],
+                    series_uid=row["series_uid"],
                     series_description=row.get("series_description"),
                     inferred_datatype=row.get("inferred_datatype"),
                     datatype_confidence=row.get("datatype_confidence"),
@@ -284,7 +308,7 @@ class DatasetsInference(BaseModel):
                             "dataset": dataset.dir_root.name,
                             "subject_id": subject_id,
                             "session_id": session_id,
-                            "series_id": series_id,
+                            "series_uid": series_id,
                             "series_description": series_description,
                             "inferred_datatype": inferred_datatype,
                             "datatype_confidence": datatype_confidence,
