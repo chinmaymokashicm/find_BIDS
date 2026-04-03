@@ -27,11 +27,14 @@ from upath import UPath
 
 class Series(BaseModel):
     series_id: str
-    path: UPath
+    data_path: UPath
+    
+    def get_features_path(self, features_root: UPath, subject_id: str, session_id: str) -> UPath:
+        return features_root / subject_id / session_id / f"{self.series_id}.json"
 
 class Session(BaseModel):
     session_id: str
-    path: UPath
+    data_path: UPath
     series: dict[str, Series] = Field(default_factory=dict)
     bids_session_id: Optional[str] = None
 
@@ -153,7 +156,7 @@ class Dataset(BaseModel):
                 session_dirs = [(d, (d / session_subdir_path)) for d in subject_dir.iterdir() if d.is_dir()]
                 for session_dir_without_path_pattern, session_dir in session_dirs:
                     session_id = session_dir_without_path_pattern.name
-                    subjects[subject_id].sessions[session_id] = Session(session_id=session_id, path=session_dir, series={})
+                    subjects[subject_id].sessions[session_id] = Session(session_id=session_id, data_path=session_dir, series={})
                     series_dirs = [(d, (d / series_subdir_path)) for d in session_dir.iterdir() if d.is_dir()]
                     for series_dir_without_path_pattern, series_dir in series_dirs:
                         series_id = series_dir_without_path_pattern.name
@@ -163,7 +166,7 @@ class Dataset(BaseModel):
                         elif dtype == "Nifti":
                             if not cls.validate_nifti_dir(series_dir):
                                 continue
-                        subjects[subject_id].sessions[session_id].series[series_id] = Series(series_id=series_id, path=series_dir)
+                        subjects[subject_id].sessions[session_id].series[series_id] = Series(series_id=series_id, data_path=series_dir)
                         series_count += 1
                         progress.update(task_id, series_count=series_count)
                 progress.advance(task_id)
@@ -227,7 +230,7 @@ class Dataset(BaseModel):
                 if subject_id not in subjects:
                     subjects[subject_id] = Subject(subject_id=subject_id, sessions={})
                 series_dirs = [(d, (d / series_subdir_path)) for d in session_dir.iterdir() if d.is_dir()]
-                subjects[subject_id].sessions[session_id] = Session(session_id=session_id, path=session_dir, series={})
+                subjects[subject_id].sessions[session_id] = Session(session_id=session_id, data_path=session_dir, series={})
                 for series_dir_without_path_pattern, series_dir in series_dirs:
                     series_id = series_dir_without_path_pattern.name
                     if dtype == "DICOM":
@@ -236,7 +239,7 @@ class Dataset(BaseModel):
                     elif dtype == "Nifti":
                         if not cls.validate_nifti_dir(series_dir):
                             continue
-                    subjects[subject_id].sessions[session_id].series[series_id] = Series(series_id=series_id, path=series_dir)
+                    subjects[subject_id].sessions[session_id].series[series_id] = Series(series_id=series_id, data_path=series_dir)
                     series_count += 1
                     progress.update(task_id, series_count=series_count)
                 progress.advance(task_id)
@@ -254,9 +257,9 @@ class Dataset(BaseModel):
         self.features_root = new_root / self.features_root.relative_to(old_root)
         for subject in self.subjects.values():
             for session in subject.sessions.values() or []:
-                session.path = new_root / session.path.relative_to(old_root)
+                session.data_path = new_root / session.data_path.relative_to(old_root)
                 for series in session.series.values() or []:
-                    series.path = new_root / series.path.relative_to(old_root)
+                    series.data_path = new_root / series.data_path.relative_to(old_root)
     
     def generate_bids_ids(self, replace_existing: bool = True) -> None:
         """
@@ -302,8 +305,8 @@ class Dataset(BaseModel):
         series = self.search_series_by_id(subject_id, session_id, series_id)
         if series is None:
             return None
-        if series.path.exists():
-            return SeriesFeatures.from_json(series.path)
+        if series.data_path.exists():
+            return SeriesFeatures.from_json(series.data_path)
         else:
             return None
     
@@ -356,10 +359,10 @@ class Dataset(BaseModel):
                         # print(f"Features for {series.path} already exist at {features_save_path}. Loaded existing features.")
                     except Exception:
                         try:
-                            features = SeriesFeatures.from_dicom_series(series.path)
+                            features = SeriesFeatures.from_dicom_series(series.data_path)
                         except Exception as e:
                             if skip_unavailable:
-                                print(f"Failed to extract features for {series.path}: {str(e)}. Skipping this series.")
+                                print(f"Failed to extract features for {series.data_path}: {str(e)}. Skipping this series.")
                                 traceback.print_exc()
                                 continue
                             else:
@@ -399,9 +402,9 @@ class Dataset(BaseModel):
                     features_path = self.features_root / subject.subject_id / session.session_id / f"{series.series_id}.json"
                     if not features_path.exists():
                         if self.dtype == "DICOM":
-                            series_features = SeriesFeatures.from_dicom_series(series.path)
+                            series_features = SeriesFeatures.from_dicom_series(series.data_path)
                         elif self.dtype == "Nifti":
-                            series_features = SeriesFeatures.from_nifti_series(series.path)
+                            series_features = SeriesFeatures.from_nifti_series(series.data_path)
                         else:
                             continue
                     else:
