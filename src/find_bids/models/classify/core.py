@@ -34,9 +34,16 @@ def merge_with_heuristic_scores(
     heuristic_scores_df: pd.DataFrame,
     preprocess_series_features: bool = True,
 ) -> pd.DataFrame:
-    """Merge series features with heuristic labels on canonical dataset/subject/session/series keys.
-
-    Optionally preprocesses feature columns first and deduplicates heuristic rows by best min_confidence.
+    """
+    Merge series features with heuristic labels on canonical dataset/subject/session/series keys.
+    
+    Args:
+        series_features_df: DataFrame containing features for each series, indexed by dataset/subject/session/series.
+        heuristic_scores_df: DataFrame containing heuristic label scores, indexed by dataset/subject/session/series or with those columns.
+        preprocess_series_features: Whether to preprocess the series features for modeling pipeline (e.g. flattening, encoding) before merging. If False, raw features will be merged, which may be useful for debugging or analysis but not for modeling.
+        
+    Returns:
+        Merged DataFrame containing features and heuristic scores for each series, ready for further processing.
     """
     if preprocess_series_features:
         series_df = prepare_features_for_modeling(series_features_df)
@@ -65,9 +72,16 @@ def assign_confidence_tier(
     high_threshold: float = 0.9,
     medium_threshold: float = 0.6,
 ) -> pd.DataFrame:
-    """Compute label_confidence from datatype and suffix confidence, then assign low/medium/high tiers.
-
-    Tiering intentionally excludes derived confidence.
+    """
+    Compute label_confidence from datatype and suffix confidence, then assign low/medium/high tiers.
+    
+    Args:
+        df: DataFrame containing at least 'datatype_confidence' and 'suffix_confidence' columns with numeric confidence scores between 0 and 1.
+        high_threshold: Minimum confidence for "high" tier.
+        medium_threshold: Minimum confidence for "medium" tier (below high_threshold).
+        
+    Returns:
+        DataFrame with new 'label_confidence' and 'confidence_tier' columns added.
     """
     result = df.copy()
     if "datatype_confidence" not in result.columns or "suffix_confidence" not in result.columns:
@@ -96,9 +110,20 @@ def assign_random_train_val_test_splits(
     random_state: int = 42,
     stratify_columns: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Assign reproducible random train/val/test labels, with optional stratification.
-
+    """
+    Assign reproducible random train/val/test labels, with optional stratification. 
     Split fractions must sum to 1.0 and the resulting split column is returned as categorical.
+    
+    Args:
+        df: DataFrame to split, indexed by dataset/subject/session/series or with those columns.
+        train_fraction: Proportion of data to assign to training set.
+        val_fraction: Proportion of data to assign to validation set.
+        test_fraction: Proportion of data to assign to test set.
+        random_state: Seed for random number generator to ensure reproducibility.
+        stratify_columns: Optional list of column names to use for stratified splitting. If None, no stratification is performed. Stratification ensures that the distribution of the specified columns is approximately preserved
+        
+    Returns:
+        DataFrame with new 'split' column containing categorical values 'train', 'val', or 'test'.
     """
     total = train_fraction + val_fraction + test_fraction
     if not np.isclose(total, 1.0):
@@ -152,9 +177,21 @@ def prepare_train_val_test_sets(
     high_conf_threshold: float = 0.9,
     medium_conf_threshold: float = 0.6,
 ) -> dict[str, pd.DataFrame]:
-    """Build merged labeled data, assign confidence tiers, and generate train/val/test subsets.
+    """
+    Build merged labeled data, assign confidence tiers, and generate train/val/test subsets.
 
-    Returns a dictionary containing the full merged table and each split as separate DataFrames.
+    Args:
+        series_features_df: DataFrame containing features for each series, indexed by dataset/subject/session/series.
+        heuristic_scores_df: DataFrame containing heuristic label scores, indexed by dataset/subject/session/series or with those columns.
+        random_state: Seed for random number generator to ensure reproducibility of train/val/test splits.
+        train_fraction: Proportion of data to assign to training set.
+        val_fraction: Proportion of data to assign to validation set.
+        test_fraction: Proportion of data to assign to test set.
+        high_conf_threshold: Minimum confidence for "high" tier.
+        medium_conf_threshold: Minimum confidence for "medium" tier (below high_threshold).
+        
+    Returns:
+        Dictionary with keys 'all', 'train', 'val', 'test' containing DataFrames for the full merged dataset and each split subset.
     """
     merged = merge_with_heuristic_scores(
         series_features_df=series_features_df,
