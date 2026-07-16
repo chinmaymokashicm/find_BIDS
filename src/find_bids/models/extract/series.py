@@ -35,6 +35,7 @@ from pydantic import BaseModel, field_validator, ConfigDict
 import pydicom as dicom
 from rich.progress import track, Progress, TextColumn, BarColumn, TimeRemainingColumn
 import numpy as np
+import pandas as pd
 from pydicom.multival import MultiValue
 from pydicom.valuerep import DSfloat
 from upath import UPath
@@ -2008,6 +2009,13 @@ class SeriesFeatures(BaseModel):
             data = json.load(f)
         return cls.model_validate(data)
     
+    @classmethod
+    def from_json_str(cls, json_str: str) -> Self:
+        if not json_str:
+            raise ValueError("Input JSON string is empty")
+        data = json.loads(json_str)
+        return cls.model_validate(data)
+    
     def flatten(self) -> dict[str, Optional[str | int | float | bool | tuple]]:
         """Flatten all features into a single dictionary for easy analysis"""
         flat = {
@@ -2075,4 +2083,306 @@ ON CONFLICT(subject_id, session_id, series_uid, series_description) DO UPDATE SE
     #         if self.temporal and other.temporal and self.temporal == other.temporal:
     #             return True
             
-    #     return False
+    #     return False  
+    
+# def get_features_from_db(
+#     db_path: UPath,
+#     save: bool = True,
+#     load_existing: bool = True,
+#     to_series_features: bool = False,
+#     datasets: Optional[Iterable[Any]] = None,
+# ) -> pd.DataFrame | list[SeriesFeatures]:
+#     """
+#     Load all series features from the SQLite database into a DataFrame,
+#     with an option to save to CSV for faster future loading and to convert back to SeriesFeatures objects.
+    
+#     Args:
+#         db_path: Path to the SQLite database file containing the series features.
+#         save: If True, saves the loaded features to a CSV file for faster future loading.
+#         load_existing: If True, attempts to load features from an existing CSV file before querying the database.
+#         to_series_features: If True, converts the loaded DataFrame back into a list of SeriesFeatures objects. If False, returns the raw DataFrame.
+#         datasets: Optional iterable of dataset-like objects or (name, dataset) tuples used to
+#             reconstruct a missing 'dataset' column by matching subject/session/series keys.
+        
+#     Returns:
+#         A pandas DataFrame containing all series features if to_series_features is False, or a list of SeriesFeatures objects if to_series_features is True.
+#     """
+
+#     def _subjects_iter(ds: Any) -> list[Any]:
+#         subjects = getattr(ds, "subjects", None)
+#         if isinstance(subjects, dict):
+#             return list(subjects.values())
+#         if isinstance(subjects, list):
+#             return subjects
+#         return []
+
+#     def _sessions_iter(subject: Any) -> list[Any]:
+#         sessions = getattr(subject, "sessions", None)
+#         if isinstance(sessions, dict):
+#             return list(sessions.values())
+#         if isinstance(sessions, list):
+#             return sessions
+#         return []
+
+#     def _series_iter(session: Any) -> list[Any]:
+#         series = getattr(session, "series", None)
+#         if isinstance(series, dict):
+#             return list(series.values())
+#         if isinstance(series, list):
+#             return series
+#         return []
+
+#     def _infer_dataset_name(ds: Any) -> str:
+#         # Prefer the features-root folder name (e.g., PROACTIVE/QIAC) when available.
+#         features_root = getattr(ds, "features_root", None)
+#         if features_root is not None:
+#             try:
+#                 return str(features_root.name).lower()
+#             except Exception:
+#                 pass
+#         dir_root = getattr(ds, "dir_root", None)
+#         if dir_root is not None:
+#             try:
+#                 return str(dir_root.name).lower()
+#             except Exception:
+#                 pass
+#         return "unknown"
+
+#     def _build_dataset_lookup(datasets_arg: Optional[Iterable[Any]]) -> pd.DataFrame:
+#         if datasets_arg is None:
+#             return pd.DataFrame(columns=["dataset", "subject_id", "session_id", "series_uid"])
+
+#         rows: list[dict[str, str]] = []
+#         for item in datasets_arg:
+#             if isinstance(item, tuple) and len(item) == 2:
+#                 dataset_name, ds = item
+#                 dataset_name = str(dataset_name).lower()
+#             else:
+#                 ds = item
+#                 dataset_name = _infer_dataset_name(ds)
+
+#             for subject in _subjects_iter(ds):
+#                 subject_id = str(getattr(subject, "subject_id", ""))
+#                 for session in _sessions_iter(subject):
+#                     session_id = str(getattr(session, "session_id", ""))
+#                     for series in _series_iter(session):
+#                         series_uid = str(getattr(series, "series_id", ""))
+#                         rows.append(
+#                             {
+#                                 "dataset": dataset_name,
+#                                 "subject_id": subject_id,
+#                                 "session_id": session_id,
+#                                 "series_uid": series_uid,
+#                             }
+#                         )
+
+#         if not rows:
+#             return pd.DataFrame(columns=["dataset", "subject_id", "session_id", "series_uid"])
+
+#         return pd.DataFrame(rows).drop_duplicates(
+#             subset=["subject_id", "session_id", "series_uid"]
+#         )
+
+#     def _attach_dataset_column(df_in: pd.DataFrame, datasets_arg: Optional[Iterable[Any]]) -> pd.DataFrame:
+#         if datasets_arg is None:
+#             return df_in
+
+#         lookup_df = _build_dataset_lookup(datasets_arg)
+#         if lookup_df.empty:
+#             return df_in
+
+#         working = df_in.copy()
+#         index_cols = [c for c in ["subject_id", "session_id", "series_uid"] if c in working.index.names]
+#         if index_cols:
+#             working = working.reset_index()
+
+#         required_keys = ["subject_id", "session_id", "series_uid"]
+#         if any(c not in working.columns for c in required_keys):
+#             if index_cols:
+#                 working = working.set_index(index_cols)
+#             return working
+
+#         for key in required_keys:
+#             working[key] = working[key].astype(str)
+
+#         # If series-level keys differ between sources, fallback to subject/session mapping
+#         # when each subject/session pair maps to a single dataset.
+#         session_unique_lookup = (
+#             lookup_df.groupby(["subject_id", "session_id"], dropna=False)["dataset"]
+#             .nunique()
+#             .reset_index(name="dataset_nunique")
+#         )
+#         session_unique_lookup = session_unique_lookup[session_unique_lookup["dataset_nunique"] == 1]
+#         if not session_unique_lookup.empty:
+#             session_dataset_lookup = lookup_df.merge(
+#                 session_unique_lookup[["subject_id", "session_id"]],
+#                 on=["subject_id", "session_id"],
+#                 how="inner",
+#             )[["subject_id", "session_id", "dataset"]].drop_duplicates(
+#                 subset=["subject_id", "session_id"]
+#             )
+#         else:
+#             session_dataset_lookup = pd.DataFrame(columns=["subject_id", "session_id", "dataset"])
+
+#         if "dataset" in working.columns:
+#             unresolved_mask = working["dataset"].isna()
+#             if unresolved_mask.any():
+#                 unresolved = working.loc[unresolved_mask, required_keys].drop_duplicates()
+#                 resolved = unresolved.merge(lookup_df, on=required_keys, how="left")
+#                 if not resolved.empty:
+#                     fill_map = {
+#                         (r["subject_id"], r["session_id"], r["series_uid"]): r["dataset"]
+#                         for _, r in resolved.iterrows()
+#                         if pd.notna(r.get("dataset"))
+#                     }
+#                     if fill_map:
+#                         working.loc[unresolved_mask, "dataset"] = working.loc[unresolved_mask, required_keys].apply(
+#                             lambda r: fill_map.get((r["subject_id"], r["session_id"], r["series_uid"]), np.nan),
+#                             axis=1,
+#                         )
+
+#                 # Fallback: fill by subject/session if series-level join did not resolve.
+#                 unresolved_mask = working["dataset"].isna()
+#                 if unresolved_mask.any() and not session_dataset_lookup.empty:
+#                     fallback = working.loc[unresolved_mask, ["subject_id", "session_id"]].merge(
+#                         session_dataset_lookup,
+#                         on=["subject_id", "session_id"],
+#                         how="left",
+#                     )
+#                     fallback_map = {
+#                         (r["subject_id"], r["session_id"]): r["dataset"]
+#                         for _, r in fallback.iterrows()
+#                         if pd.notna(r.get("dataset"))
+#                     }
+#                     if fallback_map:
+#                         working.loc[unresolved_mask, "dataset"] = working.loc[unresolved_mask, ["subject_id", "session_id"]].apply(
+#                             lambda r: fallback_map.get((r["subject_id"], r["session_id"]), np.nan),
+#                             axis=1,
+#                         )
+#         else:
+#             working = working.merge(lookup_df, on=required_keys, how="left")
+
+#             unresolved_mask = working["dataset"].isna()
+#             if unresolved_mask.any() and not session_dataset_lookup.empty:
+#                 fallback = working.loc[unresolved_mask, ["subject_id", "session_id"]].merge(
+#                     session_dataset_lookup,
+#                     on=["subject_id", "session_id"],
+#                     how="left",
+#                 )
+#                 fallback_map = {
+#                     (r["subject_id"], r["session_id"]): r["dataset"]
+#                     for _, r in fallback.iterrows()
+#                     if pd.notna(r.get("dataset"))
+#                 }
+#                 if fallback_map:
+#                     working.loc[unresolved_mask, "dataset"] = working.loc[unresolved_mask, ["subject_id", "session_id"]].apply(
+#                         lambda r: fallback_map.get((r["subject_id"], r["session_id"]), np.nan),
+#                         axis=1,
+#                     )
+
+#         if index_cols:
+#             working = working.set_index(index_cols)
+#         return working
+
+#     if load_existing:
+#         local_csv_path = db_path.parent / "all_series_features_from_db.csv"
+#         if local_csv_path.exists():
+#             print(f"Loading existing features from {local_csv_path}")
+#             with local_csv_path.open("r") as f:
+#                 df = pd.read_csv(f)
+#                 df = _attach_dataset_column(df, datasets)
+#                 index_cols = ["subject_id", "session_id", "series_uid"]
+#                 if all(c in df.columns for c in index_cols):
+#                     df.set_index(index_cols, inplace=True)
+#             return df
+#         else:
+#             print(f"No existing features found at {local_csv_path}, loading from database...")
+#     conn = initialize_features_db(db_path)
+#     query = "SELECT * FROM series_features"
+#     df = pd.read_sql_query(query, conn)
+#     conn.close()
+#     df = _attach_dataset_column(df, datasets)
+#     if save:
+#         csv_path = db_path.parent / "all_series_features_from_db.csv"
+#         with csv_path.open("w") as f:
+#             df.to_csv(f, index=False)
+#     if not to_series_features:
+#         return df
+    
+#     # Convert DataFrame rows back to SeriesFeatures objects
+#     series_features_list = []
+#     series_features_pd = df["data"]
+#     series_features_list: list[SeriesFeatures] = []
+#     for json_str in series_features_pd:
+#         try:
+#             series_features = SeriesFeatures.from_json_str(json_str)
+#             series_features_list.append(series_features)
+#         except Exception as e:
+#             print(f"Error converting JSON to SeriesFeatures: {e}")
+#             continue
+#     return series_features_list
+
+def get_features_from_db(
+    db_path: UPath,
+    save: bool = True,
+    load_existing: bool = True,
+    to_series_features: bool = False,
+) -> pd.DataFrame | list[SeriesFeatures]:
+        if load_existing:
+            local_csv_path = db_path.parent / "all_series_features_from_db.csv"
+            if local_csv_path.exists():
+                print(f"Loading existing features from {local_csv_path}")
+                with local_csv_path.open("r") as f:
+                    df = pd.read_csv(f, index_col=False)
+                # Remove any unnamed index columns that may have been added during CSV export
+                df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
+                # Rename series_uid column to series_id for consistency with expected keys
+                if "series_uid" in df.columns and "series_id" not in df.columns:
+                    df.rename(columns={"series_uid": "series_id"}, inplace=True)
+                if save:
+                    with local_csv_path.open("w") as f:
+                        df.to_csv(f, index=False)
+                if not to_series_features:
+                    return df
+
+                if "data" not in df.columns:
+                    raise ValueError(
+                        "Cached features CSV does not contain a 'data' column, so it cannot be converted "
+                        "to SeriesFeatures objects. Reload from the database or regenerate the cache."
+                    )
+
+                series_features_list: list[SeriesFeatures] = []
+                for json_str in df["data"]:
+                    try:
+                        series_features = SeriesFeatures.from_json_str(json_str)
+                        series_features_list.append(series_features)
+                    except Exception as e:
+                        print(f"Error converting JSON to SeriesFeatures: {e}")
+                        continue
+                return series_features_list
+            else:
+                print(f"No existing features found at {local_csv_path}, loading from database...")
+                
+        conn = initialize_features_db(db_path)
+        query = "SELECT * FROM series_features"
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        # Rename series_uid column to series_id for consistency with expected keys
+        if "series_uid" in df.columns and "series_id" not in df.columns:
+            df.rename(columns={"series_uid": "series_id"}, inplace=True)
+        if save:
+            csv_path = db_path.parent / "all_series_features_from_db.csv"
+            with csv_path.open("w") as f:
+                df.to_csv(f, index=False)
+        if not to_series_features:
+            return df
+        series_features_pd = df["data"]
+        series_features_list: list[SeriesFeatures] = []
+        for json_str in series_features_pd:
+            try:
+                series_features = SeriesFeatures.from_json_str(json_str)
+                series_features_list.append(series_features)
+            except Exception as e:
+                print(f"Error converting JSON to SeriesFeatures: {e}")
+                continue
+        return series_features_list

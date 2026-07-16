@@ -59,6 +59,21 @@ pip install -r requirements.txt
 
 Most examples in this repo run with PYTHONPATH=src.
 
+For notebook export support in this environment:
+
+```bash
+python -m playwright install chromium
+```
+
+Notebook export commands that are now supported:
+
+```bash
+python -m nbconvert --to html ml_analysis.ipynb
+python -m nbconvert --to webpdf ml_analysis.ipynb
+```
+
+`--to webpdf` is the recommended PDF path here because it does not require a local TeX/XeLaTeX installation.
+
 ## Quick Start Example
 
 ```python

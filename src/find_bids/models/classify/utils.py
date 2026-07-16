@@ -102,10 +102,10 @@ TIER1_FEATURES = [
     "sequence_name",
 
     # acquisition / provenance
-    # "acquisition_time",
-    # "series_time",
-    # "acquisition_order",
-    # "source_image_sequences",
+    "acquisition_time",
+    "series_time",
+    "acquisition_order",
+    "source_image_sequences",
 ]
 
 NUMERIC_FEATURES = [
@@ -131,6 +131,8 @@ NUMERIC_FEATURES = [
     "temporal_spacing",
     "num_timepoints",
     "multiband_factor",
+    "acquisition_time",
+    "acquisition_order",
 ]
 
 BOOLEAN_FEATURES = [
@@ -156,6 +158,7 @@ BOOLEAN_FEATURES = [
     "is_phase",
     "is_real",
     "is_imaginary",
+    "source_image_sequences_present",
 ]
 
 CATEGORICAL_FEATURES = [
@@ -173,6 +176,7 @@ CATEGORICAL_FEATURES = [
     "contrast_agent",
     "tr_bucket",
     "te_bucket",
+    "acquisition_time_bucket",
 ]
 
 TEXT_FEATURES = [
@@ -187,3 +191,22 @@ def safe_divide(a: np.ndarray | pd.Series, b: np.ndarray | pd.Series) -> np.ndar
         result = np.divide(a, b)
         result[~np.isfinite(result)] = np.nan
     return result
+
+def remove_default_merged_suffixes(df: pd.DataFrame, suffixes: tuple[str, str] = ("_x", "_y")) -> pd.DataFrame:
+    """
+    Remove default pandas merge suffixes from column names, keeping only the _x version.
+    
+    When a merge produces columns like 'col_x' and 'col_y', this function drops 'col_y'
+    and renames 'col_x' to 'col', avoiding duplicate column names.
+    """
+    # Drop all columns ending with _y first
+    cols_to_drop = [col for col in df.columns if col.endswith(suffixes[1])]
+    df = df.drop(columns=cols_to_drop)
+    
+    # Rename columns ending with _x by removing the suffix
+    rename_map = {}
+    for col in df.columns:
+        if col.endswith(suffixes[0]):
+            rename_map[col] = col[:-len(suffixes[0])]
+    df = df.rename(columns=rename_map)
+    return df

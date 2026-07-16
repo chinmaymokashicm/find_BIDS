@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
@@ -20,26 +21,46 @@ _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 DEFAULT_TEXT_KEYWORDS = [
     "adc",
     "asl",
+    "b0",
     "bold",
+    "bravo",
     "cbf",
     "cbv",
+    "dce",
+    "desc",
     "dwi",
     "dti",
     "epi",
     "fa",
+    "fse",
     "fieldmap",
     "flair",
+    "fmri",
     "gre",
     "localizer",
     "magnitude",
+    "mb",
     "mip",
     "mprage",
+    "mpr",
+    "pd",
     "phase",
+    "precontrast",
+    "postcontrast",
+    "sag",
+    "ax",
+    "cor",
     "rest",
     "se",
+    "spgr",
+    "spir",
+    "t1w",
     "swi",
     "t1",
+    "t2w",
     "t2",
+    "tof",
+    "tracew",
     "trace",
 ]
 
@@ -54,6 +75,31 @@ RAW_STRUCTURED_COLUMNS = {
 }
 
 MERGE_KEY_COLUMNS = ["dataset", "subject_id", "session_id", "series_id"]
+
+# Sequence-specific engineered features can be sparse in mixed-modality datasets.
+# Keep them unless they are fully constant to avoid collapsing X to text-only signals.
+PRESERVED_ENGINEERED_FEATURES = {
+    "voxel_volume",
+    "voxel_anisotropy",
+    "slice_gap_ratio",
+    "matrix_area",
+    "volumes_per_second",
+    "scan_duration_seconds",
+    "diffusion_volume_fraction",
+    "b0_volume_fraction",
+    "echo_train_efficiency",
+    "bvals_max",
+    "tr_te_ratio",
+    "slices_per_second",
+    "acquisition_hour",
+    "acquisition_order_rank",
+    "acquisition_order_fraction",
+    "source_image_sequences_present",
+    "text_char_count",
+    "text_token_count",
+}
+
+TEXT_WORKING_COLUMN = "combined_text"
 
 
 def _parse_numeric_sequence(value: object, expected_len: int | None = None) -> list[float]:
@@ -311,6 +357,7 @@ def add_log_features(df: pd.DataFrame) -> None:
 
     Values are clipped to non-negative before transformation.
     """
+    log_columns: dict[str, pd.Series] = {}
     for col in [
         "repetition_time",
         "echo_time",
@@ -319,7 +366,11 @@ def add_log_features(df: pd.DataFrame) -> None:
     ]:
         if col in df.columns:
             clipped = pd.to_numeric(df[col], errors="coerce").clip(lower=0)
-            df[f"log_{col}"] = np.log1p(clipped)
+            log_columns[f"log_{col}"] = pd.Series(np.log1p(clipped), index=df.index)
+
+    if log_columns:
+        log_names = list(log_columns)
+        df[log_names] = pd.DataFrame(log_columns, index=df.index)
 
 
 def add_missing_indicators(df: pd.DataFrame) -> None:
@@ -357,9 +408,14 @@ def add_missing_indicators(df: pd.DataFrame) -> None:
         "echo_numbers_max",
         "echo_numbers_mean",
     }
+    indicator_columns: dict[str, pd.Series] = {}
     for col in sorted(candidate_numeric):
         if col in df.columns:
-            df[f"{col}_missing"] = df[col].isna().astype(int)
+            indicator_columns[f"{col}_missing"] = df[col].isna().astype(int)
+
+    if indicator_columns:
+        indicator_names = list(indicator_columns)
+        df[indicator_names] = pd.DataFrame(indicator_columns, index=df.index)
 
 
 def normalize_boolean_features(df: pd.DataFrame) -> None:
@@ -387,16 +443,16 @@ def normalize_boolean_features(df: pd.DataFrame) -> None:
         df[col] = normalized.astype(float)
 
 
-def add_text_features(df: pd.DataFrame, keywords: list[str] | None = None) -> None:
-    """Derive lightweight text features from configured text columns.
-
-    Produces character/token counts and keyword-presence flags after normalization.
-    """
-    present_text_cols = [col for col in TEXT_FEATURES if col in df.columns]
+def build_combined_text_series(
+    df: pd.DataFrame,
+    text_columns: Sequence[str] | None = None,
+) -> pd.Series:
+    """Normalize and concatenate available text fields into a single series."""
+    text_columns = list(text_columns or TEXT_FEATURES)
+    present_text_cols = [col for col in text_columns if col in df.columns]
     if not present_text_cols:
-        return
+        return pd.Series("", index=df.index, dtype="string")
 
-    keywords = keywords or DEFAULT_TEXT_KEYWORDS
     cleaned = []
     for col in present_text_cols:
         series = (
@@ -412,13 +468,93 @@ def add_text_features(df: pd.DataFrame, keywords: list[str] | None = None) -> No
     combined = cleaned[0]
     for series in cleaned[1:]:
         combined = combined.str.cat(series, sep=" ")
-    combined = combined.str.replace(r"\s+", " ", regex=True).str.strip()
 
-    df["text_char_count"] = combined.str.len().astype(float)
-    df["text_token_count"] = combined.apply(lambda x: float(len(_TOKEN_PATTERN.findall(x))))
+    return combined.str.replace(r"\s+", " ", regex=True).str.strip()
 
-    for kw in keywords:
-        df[f"kw_{kw}"] = combined.str.contains(rf"\\b{re.escape(kw)}\\b", regex=True).astype(float)
+
+def _has_nonempty_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, float) and pd.isna(value):
+        return False
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized not in {"", "none", "nan", "null", "missing"}
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return len(value) > 0
+    return True
+
+
+def add_acquisition_features(df: pd.DataFrame) -> None:
+    """Add session-safe temporal and provenance features derived from acquisition metadata."""
+    acquisition_seconds: pd.Series | None = None
+
+    if "acquisition_time" in df.columns:
+        acquisition_seconds = pd.to_numeric(df["acquisition_time"], errors="coerce")
+    elif "series_time" in df.columns:
+        timestamps = pd.to_datetime(df["series_time"], errors="coerce")
+        acquisition_seconds = (
+            timestamps.dt.hour.astype(float) * 3600
+            + timestamps.dt.minute.astype(float) * 60
+            + timestamps.dt.second.astype(float)
+        )
+
+    if acquisition_seconds is not None:
+        hours = np.floor(acquisition_seconds / 3600.0) % 24
+        df["acquisition_hour"] = pd.Series(hours, index=df.index, dtype=float)
+
+        time_bucket = pd.Series("missing", index=df.index, dtype="string")
+        time_bucket = time_bucket.mask((hours >= 5) & (hours < 12), "morning")
+        time_bucket = time_bucket.mask((hours >= 12) & (hours < 17), "afternoon")
+        time_bucket = time_bucket.mask((hours >= 17) & (hours < 22), "evening")
+        time_bucket = time_bucket.mask((hours >= 22) | (hours < 5), "overnight")
+        df["acquisition_time_bucket"] = time_bucket
+
+    if "acquisition_order" in df.columns:
+        group_cols = [col for col in ["dataset", "subject_id", "session_id"] if col in df.columns]
+        if group_cols:
+            order_values = pd.to_numeric(df["acquisition_order"], errors="coerce")
+            grouped = order_values.groupby([df[col] for col in group_cols], dropna=False)
+            rank = grouped.rank(method="dense")
+            group_size = grouped.transform("count")
+            denominator = (group_size - 1).replace(0, np.nan)
+
+            df["acquisition_order_rank"] = rank
+            df["acquisition_order_fraction"] = safe_divide(rank - 1, denominator)
+
+    if "source_image_sequences" in df.columns:
+        df["source_image_sequences_present"] = (
+            df["source_image_sequences"].map(_has_nonempty_value).astype(float)
+        )
+
+
+def add_text_features(df: pd.DataFrame, keywords: list[str] | None = None) -> pd.DataFrame:
+    """Derive lightweight text features from configured text columns.
+
+    Produces character/token counts and keyword-presence flags after normalization.
+    """
+    present_text_cols = [col for col in TEXT_FEATURES if col in df.columns]
+    if not present_text_cols:
+        return df
+
+    keywords = keywords or DEFAULT_TEXT_KEYWORDS
+    combined = build_combined_text_series(df, text_columns=present_text_cols)
+    text_feature_columns: dict[str, pd.Series] = {
+        TEXT_WORKING_COLUMN: combined,
+        "text_char_count": combined.str.len().astype(float),
+        "text_token_count": combined.apply(lambda x: float(len(_TOKEN_PATTERN.findall(x)))),
+    }
+
+    keyword_columns = {
+        f"kw_{kw}": combined.str.contains(rf"\\b{re.escape(kw)}\\b", regex=True).astype(float)
+        for kw in keywords
+    }
+    text_feature_columns.update(keyword_columns)
+
+    text_feature_df = pd.DataFrame(text_feature_columns, index=df.index)
+    overlapping = [col for col in text_feature_df.columns if col in df.columns]
+    base_df = df.drop(columns=overlapping, errors="ignore")
+    return pd.concat([base_df, text_feature_df], axis=1)
 
 
 def normalize_categorical_features(df: pd.DataFrame) -> None:
@@ -454,7 +590,8 @@ def collapse_rare_categories(df: pd.DataFrame, min_count: int = 20, top_k: int =
 def drop_unhelpful_columns(
     df: pd.DataFrame,
     drop_raw_text: bool = True,
-    sparse_threshold: float = 0.98,
+    sparse_threshold: float = 0.95,
+    preserve_engineered_features: bool = True,
 ) -> pd.DataFrame:
     """Drop raw structured/text columns and low-value features based on simple heuristics.
 
@@ -463,12 +600,31 @@ def drop_unhelpful_columns(
     drop_cols = {c for c in RAW_STRUCTURED_COLUMNS if c in df.columns}
     if drop_raw_text:
         drop_cols.update({c for c in TEXT_FEATURES if c in df.columns})
+        if TEXT_WORKING_COLUMN in df.columns:
+            drop_cols.add(TEXT_WORKING_COLUMN)
+
+    def _safe_nunique(series: pd.Series) -> int:
+        try:
+            return int(series.nunique(dropna=True))
+        except TypeError:
+            # Some object columns can contain list-like values that are unhashable.
+            normalized = series.map(
+                lambda v: tuple(v) if isinstance(v, (list, tuple, np.ndarray, pd.Series)) else v
+            )
+            try:
+                return int(normalized.nunique(dropna=True))
+            except TypeError:
+                return int(series.astype("string").nunique(dropna=True))
 
     for col in df.columns:
         if col in MERGE_KEY_COLUMNS:
             continue
+        if preserve_engineered_features and (col in PRESERVED_ENGINEERED_FEATURES or col.startswith("kw_")):
+            if _safe_nunique(df[col]) <= 1:
+                drop_cols.add(col)
+            continue
         non_null_frac = float(df[col].notna().mean()) if len(df) else 0.0
-        nunique = int(df[col].nunique(dropna=True))
+        nunique = _safe_nunique(df[col])
         if non_null_frac <= (1.0 - sparse_threshold):
             drop_cols.add(col)
         if nunique <= 1:
@@ -505,10 +661,20 @@ def prepare_features_for_modeling(
     df: pd.DataFrame,
     one_hot_encode: bool = True,
     drop_raw_text: bool = True,
+    sparse_threshold: float = 0.95,
+    preserve_engineered_features: bool = True,
 ) -> pd.DataFrame:
     """Run end-to-end preprocessing to convert raw series-level features into model-ready tabular features.
 
     The pipeline includes parsing, engineered features, normalization, pruning, imputation, and optional one-hot encoding.
+
+    Args:
+        df: Raw or indexed series-level feature table.
+        one_hot_encode: Whether to one-hot encode known categorical feature columns.
+        drop_raw_text: Whether to drop original raw text fields after text feature extraction.
+        sparse_threshold: Fractional sparsity threshold used by pruning heuristics.
+        preserve_engineered_features: Whether to keep core engineered and keyword features
+            even when they are sparse across mixed-modality datasets.
     """
     df = _series_dataframe_with_keys(df)
 
@@ -534,16 +700,25 @@ def prepare_features_for_modeling(
     voxel_anisotropy(df)
     slice_per_second(df)
 
-    add_text_features(df)
+    add_acquisition_features(df)
+    df = add_text_features(df)
     normalize_boolean_features(df)
     _coerce_numeric_columns(df, ["field_strength"])
+
+    # Defragment once before adding more derived columns in bulk.
+    df = df.copy()
 
     add_log_features(df)
     add_missing_indicators(df)
     normalize_categorical_features(df)
     collapse_rare_categories(df)
 
-    df = drop_unhelpful_columns(df, drop_raw_text=drop_raw_text)
+    df = drop_unhelpful_columns(
+        df,
+        drop_raw_text=drop_raw_text,
+        sparse_threshold=sparse_threshold,
+        preserve_engineered_features=preserve_engineered_features,
+    )
     _impute_numeric_median(df)
 
     if one_hot_encode:

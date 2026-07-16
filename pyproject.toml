@@ -12,6 +12,10 @@ pandas = "*"
 pydantic = "*"
 pydicom = "*"
 rich = "*"
+nbconvert = "*"
+nbformat = "*"
+pandocfilters = "*"
+playwright = "*"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

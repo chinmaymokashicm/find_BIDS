@@ -1,0 +1,6 @@
+target,split,artifact,path
+inferred_joint_label,val,roc_micro,/Users/cmokashi/Documents/GitHub/find_BIDS/outputs/plots/finalized_model/roc/roc_micro_inferred_joint_label_val.png
+inferred_joint_label,val,pr_micro,/Users/cmokashi/Documents/GitHub/find_BIDS/outputs/plots/finalized_model/precision_recall/pr_micro_inferred_joint_label_val.png
+inferred_joint_label,test,confusion_matrix,/Users/cmokashi/Documents/GitHub/find_BIDS/outputs/plots/finalized_model/confusion/confusion_top15_inferred_joint_label_test.png
+inferred_joint_label,test,roc_micro,/Users/cmokashi/Documents/GitHub/find_BIDS/outputs/plots/finalized_model/roc/roc_micro_inferred_joint_label_test.png
+inferred_joint_label,test,pr_micro,/Users/cmokashi/Documents/GitHub/find_BIDS/outputs/plots/finalized_model/precision_recall/pr_micro_inferred_joint_label_test.png
